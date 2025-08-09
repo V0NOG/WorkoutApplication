@@ -7,6 +7,12 @@ import DatePicker from "./DatePicker.jsx";
 
 const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
+// Helper to keep input styling consistent (no white border/ring)
+const inputClass =
+  "border-0 border-transparent ring-0 shadow-none " +
+  "focus:border-0 focus:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0 " +
+  "outline-none bg-[#0b1324] text-zinc-100 placeholder-zinc-400 rounded-xl";
+
 export default function Templates() {
   const [list, setList] = useState([]);
   const [form, setForm] = useState({
@@ -69,30 +75,42 @@ export default function Templates() {
           <div className="space-y-4">
             <div className="space-y-1">
               <Label>Name (e.g., Pull-ups)</Label>
-              <Input value={form.name} onChange={e=>upd("name", e.target.value)} />
+              <Input className={inputClass} value={form.name} onChange={e=>upd("name", e.target.value)} />
             </div>
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1">
                 <Label>Daily target</Label>
-                <Input type="number" value={form.dailyTarget} onChange={e=>upd("dailyTarget", e.target.value)} />
+                <Input className={inputClass} type="number" value={form.dailyTarget} onChange={e=>upd("dailyTarget", e.target.value)} />
               </div>
               <div className="space-y-1">
                 <Label>Preferred set size</Label>
-                <Input type="number" value={form.defaultSetSize} onChange={e=>upd("defaultSetSize", e.target.value)} />
+                <Input className={inputClass} type="number" value={form.defaultSetSize} onChange={e=>upd("defaultSetSize", e.target.value)} />
               </div>
             </div>
 
             <div className="space-y-2">
               <Label>Active days</Label>
               <div className="flex flex-wrap gap-2">
-                {DOW.map((d, i)=> {
+                {DOW.map((d, i) => {
                   const on = form.daysOfWeek.includes(i);
                   return (
                     <button
                       key={d}
-                      onClick={()=> upd("daysOfWeek", on ? form.daysOfWeek.filter(x=>x!==i) : [...form.daysOfWeek, i].sort())}
-                      className={`px-3 py-1 rounded-full border ${on ? "bg-blue-500 text-white" : "bg-transparent border-border hover:bg-white/5"}`}
+                      type="button"
+                      onClick={() =>
+                        upd(
+                          "daysOfWeek",
+                          on ? form.daysOfWeek.filter((x) => x !== i) : [...form.daysOfWeek, i].sort()
+                        )
+                      }
+                      className={`px-3 py-1 rounded-full appearance-none
+                        ${on
+                          ? "bg-blue-500 text-white border border-transparent"
+                          : "bg-transparent border border-border hover:bg-white/5"}
+                        outline-none ring-0 shadow-none
+                        focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0
+                        active:outline-none active:ring-0`}
                     >
                       {d}
                     </button>
@@ -106,6 +124,7 @@ export default function Templates() {
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1">
                 <Label>Start date</Label>
+                {/* If DatePicker shows a border, update its internal input similarly */}
                 <DatePicker value={form.startDate} onChange={v=>upd("startDate", v)} />
               </div>
               <div className="space-y-1">
@@ -117,22 +136,22 @@ export default function Templates() {
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1">
                 <Label>Progression weekly % (0 disables)</Label>
-                <Input type="number" value={form.weeklyPct} onChange={e=>upd("weeklyPct", e.target.value)} />
+                <Input className={inputClass} type="number" value={form.weeklyPct} onChange={e=>upd("weeklyPct", e.target.value)} />
               </div>
               <div className="space-y-1">
                 <Label>Progression cap (optional)</Label>
-                <Input placeholder="e.g., 300" value={form.cap} onChange={e=>upd("cap", e.target.value)} />
+                <Input className={inputClass} placeholder="e.g., 300" value={form.cap} onChange={e=>upd("cap", e.target.value)} />
               </div>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1">
                 <Label>Deload every N weeks (0 disables)</Label>
-                <Input type="number" value={form.deloadEvery} onChange={e=>upd("deloadEvery", e.target.value)} />
+                <Input className={inputClass} type="number" value={form.deloadEvery} onChange={e=>upd("deloadEvery", e.target.value)} />
               </div>
               <div className="space-y-1">
                 <Label>Deload scale (e.g., 0.7 = 70%)</Label>
-                <Input type="number" step="0.05" value={form.deloadScale} onChange={e=>upd("deloadScale", e.target.value)} />
+                <Input className={inputClass} type="number" step="0.05" value={form.deloadScale} onChange={e=>upd("deloadScale", e.target.value)} />
               </div>
             </div>
           </div>
