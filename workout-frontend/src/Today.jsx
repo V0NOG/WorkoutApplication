@@ -6,34 +6,7 @@ import DatePicker from "./DatePicker.jsx";
 import ProgressRing from "./components/ProgressRing.jsx";
 import MonthCalendar from "./components/MonthCalendar.jsx";
 
-function TaskCardSkeleton() {
-  return (
-    <div className="card p-5 md:p-6 space-y-4 animate-pulse">
-      <div className="flex items-center gap-3">
-        <div className="h-14 w-14 rounded-full bg-white/10" />
-        <div className="mr-auto space-y-2 w-1/2">
-          <div className="h-4 w-2/3 bg-white/10 rounded" />
-          <div className="h-3 w-1/3 bg-white/10 rounded" />
-        </div>
-        <div className="h-5 w-20 bg-white/10 rounded" />
-      </div>
-      <div className="flex flex-wrap gap-2">
-        <div className="h-9 w-36 bg-white/10 rounded-full" />
-        <div className="h-9 w-14 bg-white/10 rounded-full" />
-        <div className="h-9 w-14 bg-white/10 rounded-full" />
-        <div className="h-9 w-14 bg-white/10 rounded-full" />
-        <div className="h-9 w-16 bg-white/10 rounded-full" />
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-[1fr_140px_auto] gap-3">
-        <div className="h-24 bg-white/10 rounded-xl" />
-        <div className="h-11 bg-white/10 rounded-xl" />
-        <div className="h-11 bg-white/10 rounded-xl" />
-      </div>
-    </div>
-  );
-}
-
-function TaskCard({ item, reload }) {
+function TaskCard({ item, onChanged }) {
   const [saving, setSaving] = useState(false);
   const [notes, setNotes] = useState(item.notes || "");
   const [rpe, setRpe] = useState(item.rpe ?? "");
@@ -41,21 +14,21 @@ function TaskCard({ item, reload }) {
   const done = item.repsDone || 0;
   const pct = Math.min(1, done / Math.max(1, target));
 
-  async function add(n){ await api.addReps(item._id, n); reload(); }
+  async function add(n){ await api.addReps(item._id, n); await onChanged(); }
   async function completeSet(){
     const size = item.setsPlanned?.[item.setsDone?.length ?? 0] || (item.templateId?.defaultSetSize || 10);
-    await api.completeSet(item._id, size); reload();
+    await api.completeSet(item._id, size); await onChanged();
   }
-  async function undo(){ await api.undoLast(item._id); reload(); }
+  async function undo(){ await api.undoLast(item._id); await onChanged(); }
   async function saveMeta(){
-    try{ setSaving(true);
+    try { setSaving(true);
       await api.setMeta(item._id, { notes, rpe: rpe === "" ? null : Number(rpe) });
+      await onChanged();
     } finally { setSaving(false); }
   }
 
   return (
     <div className="card p-5 md:p-6 space-y-4">
-      {/* top row */}
       <div className="flex items-center gap-3">
         <ProgressRing size={56} stroke={8} value={pct} />
         <div className="mr-auto">
@@ -65,18 +38,14 @@ function TaskCard({ item, reload }) {
         <div className="small px-2 py-0.5 rounded-full border border-border">{item.status}</div>
       </div>
 
-      {/* action buttons */}
       <div className="flex flex-wrap gap-2">
-        <Button className="rounded-full px-4" onClick={completeSet}>
-          Complete set (+{item.setsPlanned?.[0] || 10})
-        </Button>
+        <Button className="rounded-full px-4" onClick={completeSet}>Complete set (+{item.setsPlanned?.[0] || 10})</Button>
         <Button variant="outline" className="rounded-full px-3" onClick={()=>add(10)}>+10</Button>
         <Button variant="outline" className="rounded-full px-3" onClick={()=>add(5)}>+5</Button>
         <Button variant="outline" className="rounded-full px-3" onClick={()=>add(1)}>+1</Button>
         <Button variant="outline" className="rounded-full px-3" onClick={undo}>Undo</Button>
       </div>
 
-      {/* notes & rpe BELOW (spaced + uniform) */}
       <div className="grid grid-cols-1 md:grid-cols-[1fr_140px_auto] gap-3 items-start">
         <textarea
           className="w-full bg-[#0b1324] border border-border rounded-xl h-[88px] p-3 placeholder:text-muted-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
@@ -89,9 +58,7 @@ function TaskCard({ item, reload }) {
           value={rpe} onChange={(e)=>setRpe(e.target.value)}
           placeholder="RPE"
         />
-        <Button onClick={saveMeta} disabled={saving}>
-          {saving ? "Saving…" : "Save notes/RPE"}
-        </Button>
+        <Button onClick={saveMeta} disabled={saving}>{saving ? "Saving…" : "Save notes/RPE"}</Button>
       </div>
 
       <div className="small text-muted-foreground">
@@ -105,12 +72,12 @@ export default function Today() {
   const [items, setItems] = useState([]);
   const [date, setDate] = useState(dayjs().format("YYYY-MM-DD"));
 
-  // loading flags to control first render order
+  // flags to control render order
   const [loadingPlan, setLoadingPlan] = useState(true);
   const [planLoadedOnce, setPlanLoadedOnce] = useState(false);
 
-  // Calendar state
-  const [visibleMonth, setVisibleMonth] = useState(dayjs());
+  // Calendar view + colors
+  const [visibleMonth, setVisibleMonth] = useState(dayjs()); // month being displayed
   const [statusByDate, setStatusByDate] = useState({});
 
   async function loadPlan(d = date) {
@@ -131,24 +98,26 @@ export default function Today() {
 
     const map = {};
     for (const d of (s?.days ?? [])) {
-        const done = Number(d?.done ?? 0);
-        const target = Number(d?.target ?? 0);
-
-        let status = "none";
-        if (target > 0) {
+      const done = Number(d?.done ?? 0);
+      const target = Number(d?.target ?? 0);
+      let status = "none";
+      if (target > 0) {
         if (done >= target) status = "done";
         else if (done > 0)  status = "partial";
         else                status = "missed";
-        } else if (done > 0) {
-        // no target set but some reps logged → treat as partial progress
+      } else if (done > 0) {
         status = "partial";
-        }
-
-        map[d.date] = status;
+      }
+      map[d.date] = status;
     }
     setStatusByDate(map);
   }
 
+  async function refreshAll(d = date) {
+    await Promise.all([loadPlan(d), loadMonthStatus(visibleMonth)]);
+  }
+
+  // sync plan + calendar month with selected date
   useEffect(() => {
     loadPlan(date);
     setVisibleMonth(dayjs(date));
@@ -164,7 +133,7 @@ export default function Today() {
 
   return (
     <div className="stack">
-      {/* date bar */}
+      {/* Date bar */}
       <div className="card p-3 md:p-4 flex items-center gap-2">
         <Button variant="outline" size="icon" onClick={prevDay}>←</Button>
         <DatePicker value={date} onChange={setDate} />
@@ -172,27 +141,38 @@ export default function Today() {
         <Button variant="outline" onClick={today}>Today</Button>
       </div>
 
-      {/* tasks (skeleton first to reserve space, then real items) */}
-      {loadingPlan && !planLoadedOnce ? (
-        <>
-          <TaskCardSkeleton />
-          <TaskCardSkeleton />
-        </>
-      ) : (
+      {/* Tasks first, calendar stays at bottom */}
+      {loadingPlan && !planLoadedOnce ? null : (
         items.map((it) => (
-          <TaskCard key={it._id} item={it} reload={() => loadPlan(date)} />
+          <TaskCard key={it._id} item={it} onChanged={() => refreshAll(date)} />
         ))
       )}
 
-      {/* calendar renders ONLY after first plan load to prevent the "flash" up top */}
+      {/* Calendar at the bottom; selected day highlight persists */}
       {planLoadedOnce && (
         <MonthCalendar
           month={visibleMonth}
           statusByDate={statusByDate}
-          onPrev={() => setVisibleMonth(m => m.subtract(1, "month"))}
+          selectedDate={date}
+          onPrev={() => {
+            const prev = visibleMonth.subtract(1, "month");
+            setVisibleMonth(prev);
+            // keep same day number where possible (don’t auto-skip to today)
+            const dayNum = dayjs(date).date();
+            const clamped = Math.min(dayNum, prev.daysInMonth());
+            setDate(prev.date(clamped).format("YYYY-MM-DD"));
+          }}
           onNext={() => {
+            // allow navigating into the future (view)
             const next = visibleMonth.add(1, "month");
-            setVisibleMonth(dayjs.min(next, dayjs()));
+            setVisibleMonth(next);
+
+            // keep same day number; clamp selection to today if it would be future
+            const dayNum = dayjs(date).date();
+            const clamped = Math.min(dayNum, next.daysInMonth());
+            let newSel = next.date(clamped);
+            if (newSel.isAfter(dayjs(), "day")) newSel = dayjs(); // prevent selecting future day
+            setDate(newSel.format("YYYY-MM-DD"));
           }}
           onSelect={(dateStr) => setDate(dateStr)}
         />

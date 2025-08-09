@@ -4,36 +4,41 @@ import dayjs from "dayjs";
 const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
 /**
- * props:
- * - month: dayjs() anywhere inside the month to render
- * - statusByDate: { "YYYY-MM-DD": "done" | "missed" | "none" }
- * - onPrev(): go to previous month
- * - onNext(): go to next month
- * - onSelect(dateStr): click handler for a day (YYYY-MM-DD)
+ * Props:
+ *  - month: dayjs() anywhere inside the month to render
+ *  - statusByDate: { "YYYY-MM-DD": "done" | "partial" | "missed" | "none" }
+ *  - selectedDate: "YYYY-MM-DD"
+ *  - onPrev, onNext: month nav handlers
+ *  - onSelect(dateStr): click a day
  */
-export default function MonthCalendar({ month, statusByDate = {}, onPrev, onNext, onSelect }) {
+export default function MonthCalendar({
+  month,
+  statusByDate = {},
+  selectedDate,
+  onPrev,
+  onNext,
+  onSelect,
+}) {
   const startOfMonth = month.startOf("month");
   const endOfMonth = month.endOf("month");
   const daysInMonth = endOfMonth.date();
   const firstWeekday = startOfMonth.day(); // 0=Sun..6=Sat
   const totalCells = 42; // 6 rows x 7 cols
 
+  // Build the 6x7 grid
   const cells = [];
   const prevMonth = startOfMonth.subtract(1, "month");
   const prevMonthDays = prevMonth.daysInMonth();
   for (let i = 0; i < firstWeekday; i++) {
     const d = prevMonthDays - firstWeekday + 1 + i;
-    const date = prevMonth.date(d);
-    cells.push({ date, inMonth: false });
+    cells.push({ date: prevMonth.date(d), inMonth: false });
   }
   for (let d = 1; d <= daysInMonth; d++) {
-    const date = startOfMonth.date(d);
-    cells.push({ date, inMonth: true });
+    cells.push({ date: startOfMonth.date(d), inMonth: true });
   }
   const trailing = totalCells - cells.length;
   for (let i = 1; i <= trailing; i++) {
-    const date = endOfMonth.add(i, "day");
-    cells.push({ date, inMonth: false });
+    cells.push({ date: endOfMonth.add(i, "day"), inMonth: false });
   }
 
   const todayStr = dayjs().format("YYYY-MM-DD");
@@ -84,21 +89,30 @@ export default function MonthCalendar({ month, statusByDate = {}, onPrev, onNext
         {cells.map(({ date, inMonth }, idx) => {
           const dateStr = date.format("YYYY-MM-DD");
           const isToday = dateStr === todayStr;
+          const isSelected = selectedDate === dateStr;
+
           return (
             <button
               key={idx}
               type="button"
               onClick={() => onSelect?.(dateStr)}
               className={[
-                "h-16 md:h-20 lg:h-24 w-full",
-                "rounded-xl border",
+                "relative h-16 md:h-20 lg:h-24 w-full rounded-xl border",
                 "outline-none focus:outline-none focus:ring-0 active:ring-0 focus-visible:ring-0",
                 colorFor(dateStr, inMonth),
-                isToday ? "ring-1 ring-blue-500/70" : "",
                 inMonth ? "hover:bg-white/5" : ""
               ].join(" ")}
               title={dateStr}
             >
+              {/* Selected overlay (stable, won’t get overridden) */}
+              {isSelected && (
+                <div className="pointer-events-none absolute inset-0 rounded-xl ring-2 ring-blue-400" />
+              )}
+              {/* Today (only if not selected) */}
+              {!isSelected && isToday && (
+                <div className="pointer-events-none absolute inset-0 rounded-xl ring-1 ring-blue-500/70" />
+              )}
+
               <div className="flex h-full w-full items-start justify-start p-2">
                 <span className={inMonth ? "text-sm md:text-base" : "text-sm opacity-60"}>
                   {date.date()}
