@@ -4,6 +4,7 @@ import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { Label } from "./components/ui/label";
 import DatePicker from "./DatePicker.jsx";
+import { appBus } from "./bus";
 
 const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
@@ -59,6 +60,7 @@ export default function Templates() {
       },
     };
     await api.createTemplate(payload);
+    appBus.dispatchEvent(new Event("templates:changed"));
     setForm({ ...form, name:"" });
     refresh();
   }
@@ -66,6 +68,7 @@ export default function Templates() {
   async function remove(id) {
     if (!confirm("Delete template?")) return;
     await api.deleteTemplate(id);
+    appBus.dispatchEvent(new Event("templates:changed"));
     refresh();
   }
 
@@ -116,6 +119,7 @@ export default function Templates() {
       },
     };
     await api.updateTemplate(editingId, payload); // <-- ensure this exists in your API
+    appBus.dispatchEvent(new Event("templates:changed"));
     cancelEdit();
     refresh();
   }

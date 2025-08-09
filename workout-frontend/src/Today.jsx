@@ -5,6 +5,7 @@ import { Button } from "./components/ui/button";
 import DatePicker from "./DatePicker.jsx";
 import ProgressRing from "./components/ProgressRing.jsx";
 import MonthCalendar from "./components/MonthCalendar.jsx";
+import { appBus } from "./bus";
 
 function TaskCard({ item, onChanged }) {
   const [saving, setSaving] = useState(false);
@@ -126,6 +127,15 @@ export default function Today() {
   useEffect(() => {
     loadMonthStatus(visibleMonth);
   }, [visibleMonth]);
+
+  useEffect(() => {
+  const handler = () => {
+    // re-pull today’s plan and the month colors
+    refreshAll(date);
+  };
+  appBus.addEventListener("templates:changed", handler);
+  return () => appBus.removeEventListener("templates:changed", handler);
+}, [date]); // keep selection in sync
 
   function prevDay() { setDate(dayjs(date).subtract(1, "day").format("YYYY-MM-DD")); }
   function nextDay() { setDate(dayjs(date).add(1, "day").format("YYYY-MM-DD")); }
