@@ -124,18 +124,37 @@ export default function Today() {
     setVisibleMonth(dayjs(date));
   }, [date]);
 
+  // reload month colors when month changes
   useEffect(() => {
     loadMonthStatus(visibleMonth);
   }, [visibleMonth]);
 
+  // single, non-nested listener effect
   useEffect(() => {
-  const handler = () => {
-    // re-pull today’s plan and the month colors
-    refreshAll(date);
-  };
-  appBus.addEventListener("templates:changed", handler);
-  return () => appBus.removeEventListener("templates:changed", handler);
-}, [date]); // keep selection in sync
+    const handler = () => {
+      (async () => {
+        await Promise.all([loadPlan(date), loadMonthStatus(visibleMonth)]);
+      })();
+    };
+
+    appBus.addEventListener("templates:changed", handler);
+
+    const onStorage = (e) => {
+      if (e.key === "templates:changed") handler();
+    };
+    window.addEventListener("storage", onStorage);
+
+    const onVisibility = () => {
+      if (!document.hidden) handler();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      appBus.removeEventListener("templates:changed", handler);
+      window.removeEventListener("storage", onStorage);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [date, visibleMonth]);
 
   function prevDay() { setDate(dayjs(date).subtract(1, "day").format("YYYY-MM-DD")); }
   function nextDay() { setDate(dayjs(date).add(1, "day").format("YYYY-MM-DD")); }
@@ -167,21 +186,17 @@ export default function Today() {
           onPrev={() => {
             const prev = visibleMonth.subtract(1, "month");
             setVisibleMonth(prev);
-            // keep same day number where possible (don’t auto-skip to today)
             const dayNum = dayjs(date).date();
             const clamped = Math.min(dayNum, prev.daysInMonth());
             setDate(prev.date(clamped).format("YYYY-MM-DD"));
           }}
           onNext={() => {
-            // allow navigating into the future (view)
-            const next = visibleMonth.add(1, "month");
+            const next = visibleMonth.add(1, "month"); // allow viewing future months
             setVisibleMonth(next);
-
-            // keep same day number; clamp selection to today if it would be future
             const dayNum = dayjs(date).date();
             const clamped = Math.min(dayNum, next.daysInMonth());
             let newSel = next.date(clamped);
-            if (newSel.isAfter(dayjs(), "day")) newSel = dayjs(); // prevent selecting future day
+            if (newSel.isAfter(dayjs(), "day")) newSel = dayjs(); // avoid selecting future day
             setDate(newSel.format("YYYY-MM-DD"));
           }}
           onSelect={(dateStr) => setDate(dateStr)}

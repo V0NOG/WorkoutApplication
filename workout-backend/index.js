@@ -12,14 +12,10 @@ import crypto from 'crypto';
 
 const app = express();
 app.use(helmet());
+app.use(rateLimit({ windowMs: 60_000, max: 120 }));
 app.use(cors({ origin: process.env.CORS_ORIGIN || 'http://localhost:5173', credentials: true }));
 app.use(express.json());
 app.use(cookieParser());
-
-// basic global rate limit
-app.use(rateLimit({ windowMs: 60_000, max: 120 }));
-app.use(cors({ origin: 'http://localhost:5173', credentials: true }));
-app.use(express.json());
 
 // --- MongoDB ---
 async function connectMongo() {
@@ -35,9 +31,6 @@ async function connectMongo() {
 
     await mongoose.connect(process.env.MONGODB_URI, {
       // Atlas uses TLS by default; no extra opts needed.
-      // Keep these here if you ever self-host:
-      // serverSelectionTimeoutMS: 10000,
-      // retryWrites: true,
     });
     console.log('✅ MongoDB connected');
   } catch (err) {
@@ -77,7 +70,6 @@ const TaskTemplateSchema = new mongoose.Schema({
   },
   active: { type: Boolean, default: true },
 
-  // NEW:
   progression: {                                    // linear weekly progression
     weeklyPct: { type: Number, default: 0 },        // e.g., 5 => +5% per week
     cap: { type: Number, default: null }            // max target value
@@ -96,10 +88,13 @@ const DailyInstanceSchema = new mongoose.Schema({
   setsPlanned: [Number],              // planned set sizes (e.g., [20,20,...])
   setsDone: [Number],                 // actual completions, partials allowed
   repsDone: { type: Number, default: 0 },
-  status: { type: String, default: 'ontrack' }, // ontrack|ahead|behind|done
+  status: { type: String, default: 'on-track' }, // ontrack|ahead|behind|done
   notes: String,
   rpe: Number
 }, { timestamps: true });
+
+// Ensure only one DailyInstance per user/template/date
+DailyInstanceSchema.index({ userId: 1, templateId: 1, date: 1 }, { unique: true });
 
 const User = mongoose.model('User', UserSchema);
 const TaskTemplate = mongoose.model('TaskTemplate', TaskTemplateSchema);
@@ -146,8 +141,8 @@ function planSets(target, setSize) {
 }
 
 function computeStatus(repsDone, target) {
-  if (repsDone === 0) return 'ontrack';
-  if (repsDone < target) return 'ontrack';
+  if (repsDone === 0) return 'on-track';
+  if (repsDone < target) return 'on-track';
   if (repsDone === target) return 'done';
   return 'ahead';
 }
@@ -208,31 +203,109 @@ function setRefreshCookie(res, token) {
   });
 }
 
-async function materializeForDate(userId, date) {
-  const templates = await TaskTemplate.find({ userId, active: true }).lean();
-  const actives = templates.filter(t => isActiveOnDate(t, date));
-  const existing = await DailyInstance.find({ userId, date }).lean();
-  const existingByTpl = new Map(existing.map(x => [x.templateId.toString(), x]));
-
-  const toCreate = [];
-  actives.forEach(t => {
-    if (!existingByTpl.has(t._id.toString())) {
-      const target = computeTargetWithRules(t, date); // <— changed
-      const setsPlanned = planSets(target, t.defaultSetSize || target);
-      toCreate.push({
-        userId,
-        templateId: t._id,
-        date,
-        target,
-        setsPlanned,
-        setsDone: [],
-        repsDone: 0,
-        status: 'ontrack'
-      });
-    }
-  });
-  if (toCreate.length) await DailyInstance.insertMany(toCreate);
+function arraysEqual(a = [], b = []) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
 }
+
+// Idempotent & race-safe: removes stale rows, updates changed ones, upserts missing ones,
+// and deduplicates if any pre-exist. Safe under concurrent /plan calls.
+async function materializeForDate(userId, date) {
+  // Load active templates and existing dailies for the date
+  const templates = await TaskTemplate.find({ userId, active: true }).lean();
+  const tplById = new Map(templates.map(t => [t._id.toString(), t]));
+
+  const existing = await DailyInstance.find({ userId, date }).lean();
+
+  // (A) Remove rows whose template is gone or inactive on that date
+  const toRemoveIds = [];
+  for (const di of existing) {
+    const tpl = tplById.get(di.templateId.toString());
+    if (!tpl || !isActiveOnDate(tpl, date)) toRemoveIds.push(di._id);
+  }
+  if (toRemoveIds.length) {
+    await DailyInstance.deleteMany({ _id: { $in: toRemoveIds } });
+  }
+
+  // (B) Deduplicate: keep the first, delete the rest for the same templateId
+  const remain = await DailyInstance.find({ userId, date }).lean();
+  const seen = new Set();
+  const dupDelete = [];
+  for (const di of remain) {
+    const key = di.templateId.toString();
+    if (seen.has(key)) dupDelete.push(di._id);
+    else seen.add(key);
+  }
+  if (dupDelete.length) {
+    await DailyInstance.deleteMany({ _id: { $in: dupDelete } });
+  }
+
+  // (C) Update snapshots for still-valid rows if template-derived fields changed
+  const cleaned = await DailyInstance.find({ userId, date }).lean();
+  for (const di of cleaned) {
+    const tpl = tplById.get(di.templateId.toString());
+    if (!tpl) continue;
+
+    const newTarget = computeTargetWithRules(tpl, date);
+    const newSets = planSets(newTarget, tpl.defaultSetSize || newTarget);
+
+    if (di.target !== newTarget || !arraysEqual(di.setsPlanned, newSets)) {
+      await DailyInstance.updateOne(
+        { _id: di._id },
+        {
+          $set: {
+            target: newTarget,
+            setsPlanned: newSets,
+            status: computeStatus(di.repsDone || 0, newTarget)
+          }
+        }
+      );
+    }
+  }
+
+  // (D) Upsert missing rows (race-safe). No manual createdAt/updatedAt here.
+  // Mongoose will add them when we pass { timestamps: true } to bulkWrite.
+  const ops = [];
+  for (const tpl of templates) {
+    if (!isActiveOnDate(tpl, date)) continue;
+
+    const newTarget = computeTargetWithRules(tpl, date);
+    const newSets = planSets(newTarget, tpl.defaultSetSize || newTarget);
+
+    ops.push({
+      updateOne: {
+        filter: { userId, templateId: tpl._id, date },
+        update: {
+          // If the doc exists, we don't change the snapshot here; step (C) already handles updates.
+          // On insert, we seed the document.
+          $setOnInsert: {
+            userId,
+            templateId: tpl._id,
+            date,
+            target: newTarget,
+            setsPlanned: newSets,
+            setsDone: [],
+            repsDone: 0,
+            status: 'on-track'
+          }
+        },
+        upsert: true
+      }
+    });
+  }
+
+  if (ops.length) {
+    try {
+      // Important: let Mongoose add updatedAt/createdAt automatically.
+      await DailyInstance.bulkWrite(ops, { ordered: false, timestamps: true });
+    } catch (err) {
+      // Ignore duplicate key races from concurrent requests
+      if (err?.code !== 11000) throw err;
+    }
+  }
+}
+
 
 // --- Routes: Auth ---
 app.post('/auth/register', async (req, res) => {
@@ -249,6 +322,7 @@ app.post('/auth/register', async (req, res) => {
   const refresh = makeRefresh();
   const hash = sha256(refresh);
   await User.updateOne({ _id: user._id }, { $push: { refreshHashes: hash } });
+  await User.updateOne({ _id: user._id }, { $addToSet: { refreshHashes: hash } });
 
   setRefreshCookie(res, refresh); // httpOnly cookie
   res.json({ token: access, user: { id: user._id, email: user.email, tz: user.tz } });
@@ -265,7 +339,9 @@ app.post('/auth/login', async (req, res) => {
   const access = signAccess(user._id.toString());
   const refresh = makeRefresh();
   const hash = sha256(refresh);
-  await User.updateOne({ _id: user._id }, { $push: { refreshHashes: hash } });
+
+  // Avoid duplicates on retries
+  await User.updateOne({ _id: user._id }, { $addToSet: { refreshHashes: hash } });
 
   setRefreshCookie(res, refresh);
   res.json({ token: access, user: { id: user._id, email: user.email, tz: user.tz } });
@@ -279,14 +355,23 @@ app.get('/me', auth, async (req, res) => {
 app.post('/auth/refresh', async (req, res) => {
   const rt = req.cookies?.refreshToken;
   if (!rt) return res.status(401).json({ error: 'No refresh' });
-  const user = await User.findOne({ refreshHashes: sha256(rt) });
+
+  const oldHash = sha256(rt);
+  const user = await User.findOne({ refreshHashes: oldHash });
   if (!user) return res.status(401).json({ error: 'Invalid refresh' });
 
   const access = signAccess(user._id.toString());
-  // rotate refresh
+
+  // rotate: remove old, then add new
   const newRefresh = makeRefresh();
   const newHash = sha256(newRefresh);
-  await User.updateOne({ _id: user._id }, { $pull: { refreshHashes: sha256(rt) }, $push: { refreshHashes: newHash } });
+
+  // step 1: pull old hash
+  await User.updateOne({ _id: user._id }, { $pull: { refreshHashes: oldHash } });
+
+  // step 2: add new hash (addToSet prevents dupes)
+  await User.updateOne({ _id: user._id }, { $addToSet: { refreshHashes: newHash } });
+
   setRefreshCookie(res, newRefresh);
   res.json({ token: access });
 });

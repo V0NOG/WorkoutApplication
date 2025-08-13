@@ -26,6 +26,7 @@ async function req(path, opts = {}, _retried = false) {
     headers,
     // only include cookies for /auth routes (for refresh)
     credentials: path.startsWith('/auth') ? 'include' : 'same-origin',
+    cache: 'no-store', // avoid caching reads in dev
   });
 
   if (res.status === 401 && !_retried) {
@@ -40,20 +41,22 @@ async function req(path, opts = {}, _retried = false) {
   return safeJson(res);
 }
 
+const ts = () => `t=${Date.now()}`;
+
 export const api = {
   register: (email, password) => req('/auth/register', { method: 'POST', body: JSON.stringify({ email, password }) }),
   login:    (email, password) => req('/auth/login',    { method: 'POST', body: JSON.stringify({ email, password }) }),
   me:       () => req('/me'),
-  listTemplates: () => req('/templates'),
+  listTemplates: () => req(`/templates?${ts()}`),
   createTemplate: (tpl) => req('/templates', { method: 'POST', body: JSON.stringify(tpl) }),
   updateTemplate: (id, patch) => req(`/templates/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   deleteTemplate: (id) => req(`/templates/${id}`, { method: 'DELETE' }),
-  getPlan: (date) => req(`/plan${date ? `?date=${date}` : ''}`),
+  getPlan: (date) => req(`/plan${date ? `?date=${date}&` : '?'}${ts()}`),
   addReps: (dailyId, addReps) => req(`/daily/${dailyId}/progress`, { method: 'PATCH', body: JSON.stringify({ addReps }) }),
   completeSet: (dailyId, size) => req(`/daily/${dailyId}/progress`, { method: 'PATCH', body: JSON.stringify({ completeSet: size }) }),
   undoLast: (dailyId) => req(`/daily/${dailyId}/progress`, { method: 'PATCH', body: JSON.stringify({ undoLast: true }) }),
   setMeta: (dailyId, meta) => req(`/daily/${dailyId}/meta`, { method: 'PATCH', body: JSON.stringify(meta) }),
-  statsSummary: (from, to) => req(`/stats/summary?from=${from}&to=${to}`),
+  statsSummary: (from, to) => req(`/stats/summary?from=${from}&to=${to}&${ts()}`),
   requestPasswordReset: (email) => req('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) }),
   resetPassword: (token, password) => req('/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, password }) }),
 };
