@@ -14,7 +14,7 @@ function useDebouncedEffect(fn, deps, delay = 500) {
   useEffect(() => {
     const id = setTimeout(fn, delay);
     return () => clearTimeout(id);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, delay]);
 }
 
@@ -23,7 +23,16 @@ function TaskCard({ item, onChanged }) {
   const [notes, setNotes] = useState(item.notes || "");
   const [rpe, setRpe] = useState(item.rpe ?? "");
   const [weight, setWeight] = useState(item.weight ?? item.meta?.weight ?? ""); // user actual
-  const [showFeedback, setShowFeedback] = useState(false); // NEW: feedback toggle (default hidden)
+  const [showFeedback, setShowFeedback] = useState(false); // feedback toggle (default hidden)
+
+  // NEW: custom reps input
+  const [customReps, setCustomReps] = useState("");
+  async function addCustom() {
+    const n = Number(customReps);
+    if (!Number.isFinite(n) || n <= 0) return;
+    await add(n);
+    setCustomReps("");
+  }
 
   const unit = item?.templateId?.unit || "reps";
   const target = Number(item.target || 0);
@@ -32,9 +41,7 @@ function TaskCard({ item, onChanged }) {
 
   const isGym = item?.templateId?.kind === "gym";
   const targetWeight = isGym ? (item?.templateId?.weight ?? null) : null;
-
-  // NEW: show the "of Xkg" suffix only when gym + weight > 0
-  const showTargetWeightText = isGym && Number(targetWeight) > 0;
+  const showTargetWeightText = isGym && Number(targetWeight) > 0; // show "of Xkg" only when > 0
 
   async function add(n) { await api.addReps(item._id, n); await onChanged(); }
   async function completeSet() {
@@ -78,7 +85,7 @@ function TaskCard({ item, onChanged }) {
             {/* Show target + actual for Gym inline */}
             {isGym && (
               <>
-                {targetWeight != null && (
+                {targetWeight != null && Number(targetWeight) > 0 && (
                   <span className="small px-2 py-0.5 rounded-full border border-border">
                     Target: {targetWeight} kg
                   </span>
@@ -111,7 +118,7 @@ function TaskCard({ item, onChanged }) {
           <div className="small px-2 py-0.5 rounded-full border border-border capitalize">
             {item.status}
           </div>
-          {/* NEW: Toggle button to show/hide feedback inputs */}
+          {/* Toggle button to show/hide feedback inputs */}
           <Button
             variant="outline"
             size="sm"
@@ -123,11 +130,44 @@ function TaskCard({ item, onChanged }) {
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        <Button className="rounded-full px-4" onClick={completeSet}>Complete set (+{firstSetSize})</Button>
+      {/* Buttons + NEW custom reps */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button className="rounded-full px-4" onClick={completeSet}>
+          Complete set (+{firstSetSize})
+        </Button>
         <Button variant="outline" className="rounded-full px-3" onClick={()=>add(10)}>+10</Button>
         <Button variant="outline" className="rounded-full px-3" onClick={()=>add(5)}>+5</Button>
         <Button variant="outline" className="rounded-full px-3" onClick={()=>add(1)}>+1</Button>
+
+        {/* NEW: custom reps input + Add (styled like +1) */}
+        <div className="inline-flex items-center gap-2">
+          <Input
+            type="number"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            min={1}
+            placeholder="reps"
+            value={customReps}
+            onChange={(e) => setCustomReps(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") addCustom(); }}
+            className={[
+              "h-9 w-24 rounded-full px-3 text-center",
+              "border border-input bg-background",
+              "placeholder:text-muted-foreground",
+              "focus:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:border-ring",
+              "transition-colors hover:bg-muted"
+            ].join(" ")}
+          />
+          <Button
+            variant="outline"
+            className="rounded-full px-3"
+            onClick={addCustom}
+            disabled={!customReps || Number(customReps) <= 0}
+          >
+            Add
+          </Button>
+        </div>
+
         <Button variant="outline" className="rounded-full px-3" onClick={undo}>Undo</Button>
       </div>
 
@@ -165,6 +205,16 @@ function TaskCard({ item, onChanged }) {
   );
 }
 
+// --- helper: is a template active on a date? ---
+function isActiveOnDate(tpl, dateStr) {
+  const d = dayjs(dateStr);
+  const startOk = !tpl.schedule?.startDate || !d.isBefore(dayjs(tpl.schedule.startDate), "day");
+  const endOk = !tpl.schedule?.endDate || !d.isAfter(dayjs(tpl.schedule.endDate), "day");
+  const type = tpl.schedule?.type || "weekly";
+  const dowOk = type === "weekly" ? (tpl.schedule?.daysOfWeek || []).includes(d.day()) : false;
+  return startOk && endOk && dowOk;
+}
+
 export default function Today() {
   const [items, setItems] = useState([]);
   const [date, setDate] = useState(dayjs().format("YYYY-MM-DD"));
@@ -174,6 +224,7 @@ export default function Today() {
 
   const [visibleMonth, setVisibleMonth] = useState(dayjs());
   const [statusByDate, setStatusByDate] = useState({});
+  const [groupsByDate, setGroupsByDate] = useState({}); // groups for MonthCalendar
 
   async function loadPlan(d = date) {
     setLoadingPlan(true);
@@ -191,7 +242,7 @@ export default function Today() {
     const to = m.endOf("month").format("YYYY-MM-DD");
     const s = await api.statsSummary(from, to);
 
-    const map = {};
+    const statusMap = {};
     for (const d of s?.days ?? []) {
       const done = Number(d?.done ?? 0);
       const target = Number(d?.target ?? 0);
@@ -203,9 +254,29 @@ export default function Today() {
       } else if (done > 0) {
         status = "partial";
       }
-      map[d.date] = status;
+      statusMap[d.date] = status;
     }
-    setStatusByDate(map);
+    setStatusByDate(statusMap);
+
+    // Also compute groupsByDate for this visible month (client-side from templates)
+    try {
+      const tpls = await api.listTemplates();
+      const gmap = {};
+      for (let d = m.startOf("month"); !d.isAfter(m.endOf("month"), "day"); d = d.add(1, "day")) {
+        const dateStr = d.format("YYYY-MM-DD");
+        const groups = [];
+        for (const t of tpls) {
+          if (isActiveOnDate(t, dateStr)) {
+            const g = (t.group || "Ungrouped").trim() || "Ungrouped";
+            if (!groups.includes(g)) groups.push(g);
+          }
+        }
+        if (groups.length) gmap[dateStr] = groups;
+      }
+      setGroupsByDate(gmap);
+    } catch {
+      setGroupsByDate({});
+    }
   }
 
   async function refreshAll(d = date) {
@@ -266,6 +337,7 @@ export default function Today() {
         <MonthCalendar
           month={visibleMonth}
           statusByDate={statusByDate}
+          groupsByDate={groupsByDate}
           selectedDate={date}
           onPrev={() => {
             const prev = visibleMonth.subtract(1, "month");

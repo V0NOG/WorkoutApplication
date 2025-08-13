@@ -7,12 +7,34 @@ const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
  * Props:
  *  - month: dayjs()
  *  - statusByDate: { "YYYY-MM-DD": "done" | "partial" | "missed" | "none" }
+ *  - groupsByDate?: { "YYYY-MM-DD": string[] }   // NEW (optional)
  *  - selectedDate: "YYYY-MM-DD"
  *  - onPrev, onNext, onSelect(dateStr)
  */
+
+// Deterministic hue from a string
+function hueFromString(s = "") {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
+  return h;
+}
+
+function GroupPill({ name }) {
+  const hue = hueFromString(name);
+  const dot = `hsl(${hue} 80% 50%)`;
+  // neutral surface + colored dot keeps it readable in both themes
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-border bg-background/70 px-2 py-0.5 text-xs leading-5">
+      <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: dot }} />
+      <span className="truncate">{name}</span>
+    </div>
+  );
+}
+
 export default function MonthCalendar({
   month,
   statusByDate = {},
+  groupsByDate = {}, // NEW
   selectedDate,
   onPrev,
   onNext,
@@ -90,6 +112,7 @@ export default function MonthCalendar({
           const dateStr = date.format("YYYY-MM-DD");
           const isToday = dateStr === todayStr;
           const isSelected = selectedDate === dateStr;
+          const groups = (inMonth && groupsByDate[dateStr]) || [];
 
           return (
             <button
@@ -97,22 +120,38 @@ export default function MonthCalendar({
               type="button"
               onClick={() => onSelect?.(dateStr)}
               className={[
-                "relative h-16 md:h-20 lg:h-24 w-full rounded-xl border transition-colors",
+                "relative h-20 md:h-24 w-full rounded-xl border transition-colors",
                 "outline-none focus:outline-none",
                 colorFor(dateStr, inMonth),
                 inMonth ? "hover:bg-muted" : "",
               ].join(" ")}
               title={dateStr}
             >
-              {/* Selected overlay (stable) */}
+              {/* Selected overlay */}
               {isSelected && <div className="pointer-events-none absolute inset-0 rounded-xl ring-2 ring-[var(--ring)]" />}
               {/* Today (only if not selected) */}
               {!isSelected && isToday && (
                 <div className="pointer-events-none absolute inset-0 rounded-xl ring-1 ring-[var(--ring)]/70" />
               )}
 
-              <div className="flex h-full w-full items-start justify-start p-2">
-                <span className={inMonth ? "text-sm md:text-base" : "text-sm opacity-60"}>{date.date()}</span>
+              <div className="flex h-full w-full flex-col p-2">
+                <div className="text-left">
+                  <span className={inMonth ? "text-sm md:text-base" : "text-sm opacity-60"}>{date.date()}</span>
+                </div>
+
+                {/* Groups list (stacked) */}
+                {inMonth && groups.length > 0 && (
+                  <div className="mt-1 flex-1 overflow-hidden">
+                    <div className="flex flex-col gap-1 max-h-full overflow-hidden">
+                      {groups.slice(0, 3).map((g, i) => (
+                        <GroupPill key={`${g}-${i}`} name={g} />
+                      ))}
+                      {groups.length > 3 && (
+                        <div className="text-[10px] text-muted-foreground">+{groups.length - 3} more…</div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             </button>
           );

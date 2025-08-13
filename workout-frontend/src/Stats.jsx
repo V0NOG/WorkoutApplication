@@ -3,6 +3,80 @@ import { api } from "./api";
 import dayjs from "dayjs";
 import { Button } from "./components/ui/button";
 
+/* ---------- Small helpers for the weight chart ---------- */
+
+// Linear regression slope in kg/week (x = epoch days, y = kg)
+function trendKgPerWeek(points) {
+  if (!points || points.length < 2) return 0;
+  const xs = points.map(p => dayjs(p.date).startOf("day").valueOf() / 86400000); // days
+  const ys = points.map(p => Number(p.weight));
+  const n = xs.length;
+  const sumX = xs.reduce((a,b)=>a+b, 0);
+  const sumY = ys.reduce((a,b)=>a+b, 0);
+  const sumXY = xs.reduce((a, x, i) => a + x * ys[i], 0);
+  const sumXX = xs.reduce((a, x) => a + x * x, 0);
+  const denom = n * sumXX - sumX * sumX;
+  if (denom === 0) return 0;
+  const slopePerDay = (n * sumXY - sumX * sumY) / denom;
+  return slopePerDay * 7; // kg per week
+}
+
+// Tiny dependency-free SVG line chart
+function LineChart({ data, height = 220 }) {
+  if (!data || data.length < 2) return null;
+
+  const padding = { left: 40, right: 12, top: 16, bottom: 28 };
+  const w = 800; // logical width (viewBox)
+  const h = height;
+  const plotW = w - padding.left - padding.right;
+  const plotH = h - padding.top - padding.bottom;
+
+  const minW = Math.min(...data.map(d => Number(d.weight)));
+  const maxW = Math.max(...data.map(d => Number(d.weight)));
+  const yMin = Math.floor(minW - 0.5);
+  const yMax = Math.ceil(maxW + 0.5);
+  const N = data.length;
+
+  const points = data.map((d, i) => {
+    const x = padding.left + (N === 1 ? plotW / 2 : (i / (N - 1)) * plotW);
+    const y = padding.top + (1 - (Number(d.weight) - yMin) / (yMax - yMin || 1)) * plotH;
+    return { x, y, date: d.date, weight: Number(d.weight) };
+  });
+
+  const path = points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ");
+  const xTickIdx = [...new Set([0, Math.floor((N - 1) / 2), N - 1])];
+
+  return (
+    <div className="w-full overflow-hidden">
+      <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-auto">
+        {/* x labels: first / middle / last */}
+        {xTickIdx.map((idx) => (
+          <text
+            key={idx}
+            x={points[idx].x}
+            y={h - 6}
+            fontSize="10"
+            textAnchor="middle"
+            className="fill-muted-foreground"
+          >
+            {dayjs(data[idx].date).format("MMM D")}
+          </text>
+        ))}
+
+        {/* line */}
+        <path d={path} fill="none" stroke="currentColor" className="text-foreground/80" strokeWidth="2" />
+
+        {/* dots */}
+        {points.map((p, i) => (
+          <circle key={i} cx={p.x} cy={p.y} r="3" className="fill-foreground" />
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+/* ---------- Your existing components ---------- */
+
 function Bar({ label, value, max }) {
   const pct = Math.min(100, Math.round((value / Math.max(1, max)) * 100));
   return (
@@ -38,6 +112,9 @@ export default function Stats() {
   const [err, setErr] = useState(null);
   const [templates, setTemplates] = useState([]);
 
+  // NEW: weight series state
+  const [weightSeries, setWeightSeries] = useState([]); // [{templateId,name,data:[{date,weight}]}]
+
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -55,6 +132,19 @@ export default function Stats() {
         if (alive) setLoading(false);
       }
     })();
+
+    // ALSO fetch weight time-series for the same range
+    (async () => {
+      try {
+        const res = await api.weightsSeries(range.from, range.to);
+        if (!alive) return;
+        setWeightSeries(res?.series || []);
+      } catch {
+        if (!alive) return;
+        setWeightSeries([]);
+      }
+    })();
+
     return () => { alive = false; };
   }, [range]);
 
@@ -113,6 +203,12 @@ export default function Stats() {
     }
     return m;
   }, [caliTemplates]);
+
+  // Filter to only series with meaningful data (>= 2 points)
+  const weightSeriesWithData = useMemo(
+    () => (weightSeries || []).filter(s => (s.data || []).length >= 2),
+    [weightSeries]
+  );
 
   return (
     <div className="stack">
@@ -174,7 +270,37 @@ export default function Stats() {
         )}
       </div>
 
-      {/* ---- New: Gym overview ---- */}
+      {/* ---- NEW: Actual weight trend (only shows if there is data) ---- */}
+      {weightSeriesWithData.length > 0 && (
+        <div className="card p-6 space-y-6">
+          <div className="text-lg font-semibold">Actual Weight Trend</div>
+          <div className="space-y-6">
+            {weightSeriesWithData.map((s) => {
+              const slope = trendKgPerWeek(s.data);
+              const label =
+                slope > 0.05 ? `Progressing (+${slope.toFixed(2)} kg/wk)` :
+                slope < -0.05 ? `Regressing (${slope.toFixed(2)} kg/wk)` :
+                "Flat (±0.05 kg/wk)";
+              const badgeClass =
+                slope > 0.05 ? "border-emerald-500 text-emerald-600" :
+                slope < -0.05 ? "border-red-500 text-red-600" :
+                "border-muted text-muted-foreground";
+
+              return (
+                <div key={s.templateId} className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="font-medium truncate">{s.name}</div>
+                    <div className={`text-xs px-2 py-1 rounded-full border ${badgeClass}`}>{label}</div>
+                  </div>
+                  <LineChart data={s.data} />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ---- Gym overview ---- */}
       {gymTemplates.length > 0 && (
         <div className="card p-6">
           <div className="text-lg font-semibold mb-3">Gym Overview</div>
@@ -198,7 +324,7 @@ export default function Stats() {
         </div>
       )}
 
-      {/* ---- New: Calisthenics by group ---- */}
+      {/* ---- Calisthenics by group ---- */}
       {caliTemplates.length > 0 && (
         <div className="card p-6">
           <div className="text-lg font-semibold mb-3">Calisthenics Overview</div>

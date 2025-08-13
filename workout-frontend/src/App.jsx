@@ -55,7 +55,6 @@ export default function App() {
 
           <div className="flex-1" />
 
-          {/* Theme toggle in navbar */}
           <ThemeToggle />
 
           <div className="hidden sm:block small ml-3">{user?.email}</div>
@@ -85,6 +84,15 @@ function AuthCard({ onAuth }) {
   const [resetEmail, setResetEmail] = useState("");
   const [showForgot, setShowForgot] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // Use the same token-based styles as other inputs in your app
+  const authInputClass = [
+    "auth-input h-12 rounded-2xl",
+    "border border-input bg-background text-foreground",
+    "placeholder:text-muted-foreground",
+    "shadow-sm",
+    "focus:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:border-ring"
+  ].join(" ");
 
   async function doAuth(mode) {
     if (!email || !password || loading) return;
@@ -118,6 +126,18 @@ function AuthCard({ onAuth }) {
 
   return (
     <div className="min-h-[70vh] grid place-items-center">
+      {/* Autofill theme-aware override using your CSS variables */}
+      <style>{`
+        .auth-input:-webkit-autofill,
+        .auth-input:-webkit-autofill:hover,
+        .auth-input:-webkit-autofill:focus {
+          -webkit-box-shadow: 0 0 0px 1000px hsl(var(--background)) inset !important;
+                  box-shadow: 0 0 0px 1000px hsl(var(--background)) inset !important;
+          -webkit-text-fill-color: hsl(var(--foreground)) !important;
+          caret-color: hsl(var(--foreground)) !important;
+        }
+      `}</style>
+
       <div className="card w-full max-w-md p-6 md:p-8 space-y-5" onKeyDown={onKeyDown}>
         <div className="space-y-1">
           <div className="text-2xl font-extrabold tracking-tight">
@@ -136,7 +156,7 @@ function AuthCard({ onAuth }) {
                 placeholder="you@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="border border-border bg-white text-zinc-900 dark:bg-[#0b1324] dark:text-zinc-100 placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-primary/50"
+                className={authInputClass}
               />
             </div>
             <div className="space-y-2">
@@ -147,7 +167,7 @@ function AuthCard({ onAuth }) {
                 placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="border border-border bg-white text-zinc-900 dark:bg-[#0b1324] dark:text-zinc-100 placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-primary/50"
+                className={authInputClass}
               />
             </div>
 
@@ -179,7 +199,7 @@ function AuthCard({ onAuth }) {
                 placeholder="you@example.com"
                 value={resetEmail}
                 onChange={(e) => setResetEmail(e.target.value)}
-                className="border border-border bg-white text-zinc-900 dark:bg-[#0b1324] dark:text-zinc-100"
+                className={authInputClass}
               />
             </div>
             <div className="flex gap-2">

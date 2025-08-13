@@ -54,6 +54,7 @@ const TaskTemplateSchema = new mongoose.Schema({
   unit: { type: String, default: 'reps' },          // reps | minutes | distance
   dailyTarget: Number,
   defaultSetSize: Number,
+  weight: { type: Number, default: null },          // 👈 target weight for GYM
   schedule: {
     type: { type: String, default: 'weekly' },
     daysOfWeek: [Number],                           // 0..6 (Sun..Sat)
@@ -68,7 +69,8 @@ const TaskTemplateSchema = new mongoose.Schema({
 
   progression: {
     weeklyPct: { type: Number, default: 0 },
-    cap: { type: Number, default: null }
+    cap: { type: Number, default: null },
+    // (mode is used client-side; optional to store if you like)
   },
   deloadRule: {
     everyNWeeks: { type: Number, default: 0 },
@@ -87,6 +89,7 @@ const DailyInstanceSchema = new mongoose.Schema({
   status: { type: String, default: 'on-track' }, // on-track|ahead|behind|done
   notes: String,
   rpe: Number,
+  weight: { type: Number, default: null },       // 👈 user's actual weight for the day
   group: { type: String, default: '' }           // snapshot of template.group
 }, { timestamps: true });
 
@@ -261,7 +264,7 @@ async function materializeForDate(userId, date) {
     }
   }
 
-  // (D) Upsert missing rows (disable timestamps in the upsert to avoid updatedAt conflicts)
+  // (D) Upsert missing rows
   const ops = [];
   for (const tpl of templates) {
     if (!isActiveOnDate(tpl, date)) continue;
@@ -286,7 +289,7 @@ async function materializeForDate(userId, date) {
           }
         },
         upsert: true,
-        timestamps: false // 👈 prevent Mongoose from writing updatedAt in both places
+        timestamps: false
       }
     });
   }
@@ -315,7 +318,6 @@ app.post('/auth/register', async (req, res) => {
   const refresh = makeRefresh();
   const hash = sha256(refresh);
 
-  // only addToSet (avoid duplicate/conflict)
   await User.updateOne({ _id: user._id }, { $addToSet: { refreshHashes: hash } });
 
   setRefreshCookie(res, refresh);
@@ -409,14 +411,28 @@ app.post('/auth/reset-password', async (req, res) => {
 
 // --- Routes: Templates ---
 app.post('/templates', auth, async (req, res) => {
-  const { name, unit = 'reps', dailyTarget, defaultSetSize, schedule, kind = 'calisthenics', group = '' } = req.body;
+  const {
+    name,
+    unit = 'reps',
+    dailyTarget,
+    defaultSetSize,
+    schedule,
+    kind = 'calisthenics',
+    group = '',
+    weight = null,            // 👈 accept target weight
+    progression,
+    deloadRule
+  } = req.body;
+
   if (!name || !dailyTarget) return res.status(400).json({ error: 'name & dailyTarget required' });
+
   const tpl = await TaskTemplate.create({
     userId: req.userId,
     name,
     unit,
     dailyTarget,
     defaultSetSize: defaultSetSize || dailyTarget,
+    weight, // 👈 save target weight
     schedule: schedule || {
       type: 'weekly',
       daysOfWeek: [1,2,3,4,5,6,0],
@@ -424,9 +440,12 @@ app.post('/templates', auth, async (req, res) => {
       endDate: null
     },
     active: true,
-    kind,      // 👈 ensure these are saved
-    group      // 👈 ensure these are saved
+    kind,
+    group,
+    progression: progression || { weeklyPct: 0, cap: null },
+    deloadRule: deloadRule || { everyNWeeks: 0, scale: 0.7 }
   });
+
   res.json(tpl);
 });
 
@@ -484,6 +503,7 @@ app.post('/templates/seed', auth, async (req, res) => {
       unit: 'reps',
       dailyTarget: 60,
       defaultSetSize: 10,
+      weight: 40, // 👈 target weight
       schedule: { type: 'weekly', daysOfWeek: [2,5], startDate: today, endDate: null },
       progression: { weeklyPct: 3, cap: 100 },
       deloadRule: { everyNWeeks: 6, scale: 0.75 }
@@ -497,6 +517,50 @@ app.post('/templates/seed', auth, async (req, res) => {
 });
 
 // --- Routes: Stats ---
+// Return per-template weight time series (only entries with a recorded "actual" weight)
+app.get('/stats/weights', auth, async (req, res) => {
+  const toD = req.query.to ? dayjs(req.query.to) : dayjs();
+  const fromD = req.query.from ? dayjs(req.query.from) : toD.subtract(59, 'day'); // default 60 days
+  const from = fromD.format('YYYY-MM-DD');
+  const to = toD.format('YYYY-MM-DD');
+  const { templateId } = req.query;
+
+  const filter = {
+    userId: req.userId,
+    date: { $gte: from, $lte: to },
+    weight: { $ne: null },
+  };
+  if (templateId) filter.templateId = templateId;
+
+  const items = await DailyInstance.find(filter, { date: 1, weight: 1, templateId: 1 })
+    .populate('templateId', 'name kind group weight')
+    .sort({ date: 1 })
+    .lean();
+
+  // group by templateId
+  const byTpl = new Map();
+  for (const it of items) {
+    const tid = it.templateId?._id?.toString();
+    if (!tid) continue;
+    if (!byTpl.has(tid)) {
+      byTpl.set(tid, {
+        templateId: tid,
+        name: it.templateId?.name || 'Template',
+        kind: it.templateId?.kind || 'calisthenics',
+        group: it.templateId?.group || '',
+        targetWeight: it.templateId?.weight ?? null,
+        data: [],
+      });
+    }
+    byTpl.get(tid).data.push({ date: it.date, weight: it.weight });
+  }
+
+  res.json({
+    range: { from, to },
+    series: Array.from(byTpl.values()).filter(s => s.data.length > 0),
+  });
+});
+
 app.get('/stats/summary', auth, async (req, res) => {
   const to = req.query.to ? dayjs(req.query.to) : dayjs();
   const from = req.query.from ? dayjs(req.query.from) : to.subtract(27, 'day');
@@ -597,10 +661,16 @@ app.patch('/daily/:id/progress', auth, async (req, res) => {
 });
 
 app.patch('/daily/:id/meta', auth, async (req, res) => {
-  const { notes, rpe } = req.body;
+  const { notes, rpe, weight } = req.body;
+
+  const set = {};
+  if (typeof notes !== 'undefined') set.notes = notes;
+  if (typeof rpe !== 'undefined')   set.rpe = rpe;
+  if (typeof weight !== 'undefined') set.weight = (weight === null ? null : Number(weight));
+
   const di = await DailyInstance.findOneAndUpdate(
     { _id: req.params.id, userId: req.userId },
-    { $set: { notes, rpe } },
+    { $set: set },
     { new: true }
   );
   if (!di) return res.status(404).json({ error: 'Not found' });
