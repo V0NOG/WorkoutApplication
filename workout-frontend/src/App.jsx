@@ -8,6 +8,7 @@ import { Button } from "./components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "./components/ui/tabs";
 import { Input } from "./components/ui/input";
 import { Label } from "./components/ui/label";
+import ThemeToggle from "./components/ThemeToggle.jsx";
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -17,7 +18,12 @@ export default function App() {
     (async () => {
       const t = localStorage.getItem("token");
       if (!t) return;
-      try { setUser(await api.me()); } catch { setToken(""); setUser(null); }
+      try {
+        setUser(await api.me());
+      } catch {
+        setToken("");
+        setUser(null);
+      }
     })();
   }, []);
 
@@ -26,14 +32,19 @@ export default function App() {
     setToken(res.token);
     setUser(res.user);
   }
-  function logout() { setToken(""); setUser(null); }
+  function logout() {
+    setToken("");
+    setUser(null);
+  }
 
   return (
     <div className="container">
-    {user && (
-      <header className="sticky top-0 z-10 flex items-center gap-4 py-4 backdrop-blur">
-        <div className="text-xl font-extrabold">Workout<span className="text-primary">Flow</span></div>
-        {user && (
+      {user && (
+        <header className="sticky top-0 z-10 flex items-center gap-4 py-4 backdrop-blur">
+          <div className="text-xl font-extrabold">
+            Workout<span className="text-primary">Flow</span>
+          </div>
+
           <Tabs value={tab} onValueChange={setTab} className="ml-2">
             <TabsList>
               <TabsTrigger value="today">Today</TabsTrigger>
@@ -41,15 +52,22 @@ export default function App() {
               <TabsTrigger value="stats">Stats</TabsTrigger>
             </TabsList>
           </Tabs>
-        )}
-        <div className="flex-1" />
-        {user && (<div className="small">{user.email}</div>)}
-        {user && (<Button variant="outline" onClick={logout}>Logout</Button>)}
-      </header>
 
+          <div className="flex-1" />
+
+          {/* Theme toggle in navbar */}
+          <ThemeToggle />
+
+          <div className="hidden sm:block small ml-3">{user?.email}</div>
+          <Button variant="outline" className="ml-1" onClick={logout}>
+            Logout
+          </Button>
+        </header>
       )}
 
-      {!user ? <AuthCard onAuth={handleAuth} /> : (
+      {!user ? (
+        <AuthCard onAuth={handleAuth} />
+      ) : (
         <main className="stack mt-4">
           {tab === "today" && <Today />}
           {tab === "templates" && <Templates />}
@@ -112,29 +130,42 @@ function AuthCard({ onAuth }) {
           <div className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
-              <Input id="email" type="email" placeholder="you@example.com"
-                value={email} onChange={e=>setEmail(e.target.value)}
-                className="bg-[#0b1324] border-border placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-primary/50" />
+              <Input
+                id="email"
+                type="email"
+                placeholder="you@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="border border-border bg-white text-zinc-900 dark:bg-[#0b1324] dark:text-zinc-100 placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-primary/50"
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="password">Password</Label>
-              <Input id="password" type="password" placeholder="••••••••"
-                value={password} onChange={e=>setPassword(e.target.value)}
-                className="bg-[#0b1324] border-border placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-primary/50" />
+              <Input
+                id="password"
+                type="password"
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="border border-border bg-white text-zinc-900 dark:bg-[#0b1324] dark:text-zinc-100 placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-primary/50"
+              />
             </div>
 
             <div className="flex gap-2 pt-1">
-              <Button className="flex-1 shadow-sm active:scale-[.99]"
-                onClick={() => doAuth("login")} disabled={loading}>
+              <Button className="flex-1 shadow-sm active:scale-[.99]" onClick={() => doAuth("login")} disabled={loading}>
                 {loading ? "Please wait…" : "Log in"}
               </Button>
-              <Button variant="outline" className="flex-1 bg-[#0b1324] border-border hover:bg-[#0f1830]"
-                onClick={() => doAuth("register")} disabled={loading}>
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => doAuth("register")}
+                disabled={loading}
+              >
                 Create account
               </Button>
             </div>
 
-            <button className="text-sm text-primary hover:underline" onClick={()=>setShowForgot(true)}>
+            <button className="text-sm text-primary hover:underline" onClick={() => setShowForgot(true)}>
               Forgot password?
             </button>
           </div>
@@ -142,12 +173,22 @@ function AuthCard({ onAuth }) {
           <div className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="resetEmail">Reset email</Label>
-              <Input id="resetEmail" type="email" placeholder="you@example.com"
-                value={resetEmail} onChange={e=>setResetEmail(e.target.value)} />
+              <Input
+                id="resetEmail"
+                type="email"
+                placeholder="you@example.com"
+                value={resetEmail}
+                onChange={(e) => setResetEmail(e.target.value)}
+                className="border border-border bg-white text-zinc-900 dark:bg-[#0b1324] dark:text-zinc-100"
+              />
             </div>
             <div className="flex gap-2">
-              <Button onClick={doForgot} disabled={loading}>Send reset</Button>
-              <Button variant="outline" onClick={()=>setShowForgot(false)} disabled={loading}>Back</Button>
+              <Button onClick={doForgot} disabled={loading}>
+                Send reset
+              </Button>
+              <Button variant="outline" onClick={() => setShowForgot(false)} disabled={loading}>
+                Back
+              </Button>
             </div>
           </div>
         )}
@@ -157,5 +198,3 @@ function AuthCard({ onAuth }) {
     </div>
   );
 }
-
-

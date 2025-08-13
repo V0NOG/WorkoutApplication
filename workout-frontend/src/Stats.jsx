@@ -8,9 +8,10 @@ function Bar({ label, value, max }) {
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between small text-muted-foreground">
-        <span>{label}</span><span>{value}</span>
+        <span>{label}</span>
+        <span>{value}</span>
       </div>
-      <div className="h-2 rounded-full bg-[#0b1324] border border-border overflow-hidden">
+      <div className="h-2 rounded-full bg-[var(--secondary)] border border-border overflow-hidden">
         <div className="h-full bg-gradient-to-r from-blue-500 to-blue-300" style={{ width: `${pct}%` }} />
       </div>
     </div>
@@ -19,7 +20,6 @@ function Bar({ label, value, max }) {
 
 const step = 28;
 
-// default shape so UI never reads null
 const EMPTY = {
   compliancePct: 0,
   currentStreak: 0,
@@ -54,15 +54,17 @@ export default function Stats() {
         if (alive) setLoading(false);
       }
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, [range]);
 
   const canNext = dayjs(range.to).isBefore(dayjs(), "day");
 
   function prev() {
-    setRange(r => ({
+    setRange((r) => ({
       from: dayjs(r.from).subtract(step, "day").format("YYYY-MM-DD"),
-      to:   dayjs(r.to).subtract(step, "day").format("YYYY-MM-DD"),
+      to: dayjs(r.to).subtract(step, "day").format("YYYY-MM-DD"),
     }));
   }
   function next() {
@@ -84,13 +86,21 @@ export default function Stats() {
       <div className="stack">
         <div className="card p-5 text-red-500">Failed to load stats.</div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={prev}>Prev 4 weeks</Button>
-          <Button variant="outline" onClick={goToday}>Today</Button>
-          <Button onClick={next} disabled={!canNext}>Next 4 weeks</Button>
+          <Button variant="outline" onClick={prev}>
+            Prev 4 weeks
+          </Button>
+          <Button variant="outline" onClick={goToday}>
+            Today
+          </Button>
+          <Button onClick={next} disabled={!canNext}>
+            Next 4 weeks
+          </Button>
         </div>
       </div>
     );
   }
+
+  const maxTotals = Math.max(data?.totals?.done ?? 0, data?.totals?.target ?? 0, 1);
 
   return (
     <div className="stack">
@@ -98,21 +108,15 @@ export default function Stats() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="card p-5">
           <div className="small text-muted-foreground">Compliance</div>
-          <div className="text-3xl font-bold">
-            {loading ? "…" : `${data?.compliancePct ?? 0}%`}
-          </div>
+          <div className="text-3xl font-bold">{loading ? "…" : `${data?.compliancePct ?? 0}%`}</div>
         </div>
         <div className="card p-5">
           <div className="small text-muted-foreground">Current streak</div>
-          <div className="text-3xl font-bold">
-            {loading ? "…" : `${data?.currentStreak ?? 0} days`}
-          </div>
+          <div className="text-3xl font-bold">{loading ? "…" : `${data?.currentStreak ?? 0} days`}</div>
         </div>
         <div className="card p-5">
           <div className="small text-muted-foreground">Longest streak</div>
-          <div className="text-3xl font-bold">
-            {loading ? "…" : `${data?.longestStreak ?? 0} days`}
-          </div>
+          <div className="text-3xl font-bold">{loading ? "…" : `${data?.longestStreak ?? 0} days`}</div>
         </div>
       </div>
 
@@ -121,17 +125,9 @@ export default function Stats() {
         {loading ? (
           <div className="opacity-60">Loading…</div>
         ) : (
-          <div className="grid grid-cols-1 md-grid-cols-2 md:grid-cols-2 gap-4">
-            <Bar
-              label="Total done"
-              value={data?.totals?.done ?? 0}
-              max={Math.max(data?.totals?.done ?? 0, data?.totals?.target ?? 0)}
-            />
-            <Bar
-              label="Total target"
-              value={data?.totals?.target ?? 0}
-              max={Math.max(data?.totals?.done ?? 0, data?.totals?.target ?? 0)}
-            />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Bar label="Total done" value={data?.totals?.done ?? 0} max={maxTotals} />
+            <Bar label="Total target" value={data?.totals?.target ?? 0} max={maxTotals} />
           </div>
         )}
       </div>
@@ -150,10 +146,14 @@ export default function Stats() {
               return (
                 <div key={i} className="space-y-1">
                   <div className="flex items-center justify-between small text-muted-foreground">
-                    <span>{w?.from} → {w?.to}</span>
-                    <span>{done}/{target}</span>
+                    <span>
+                      {w?.from} → {w?.to}
+                    </span>
+                    <span>
+                      {done}/{target}
+                    </span>
                   </div>
-                  <div className="h-2 rounded-full bg-[#0b1324] border border-border overflow-hidden">
+                  <div className="h-2 rounded-full bg-[var(--secondary)] border border-border overflow-hidden">
                     <div className="h-full bg-blue-500" style={{ width: `${(done / max) * 100}%` }} />
                   </div>
                 </div>
@@ -167,9 +167,15 @@ export default function Stats() {
       </div>
 
       <div className="flex gap-2">
-        <Button variant="outline" onClick={prev}>Prev 4 weeks</Button>
-        <Button variant="outline" onClick={goToday}>Today</Button>
-        <Button onClick={next} disabled={!canNext}>Next 4 weeks</Button>
+        <Button variant="outline" onClick={prev}>
+          Prev 4 weeks
+        </Button>
+        <Button variant="outline" onClick={goToday}>
+          Today
+        </Button>
+        <Button onClick={next} disabled={!canNext}>
+          Next 4 weeks
+        </Button>
       </div>
     </div>
   );

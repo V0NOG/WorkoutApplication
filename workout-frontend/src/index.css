@@ -14,12 +14,25 @@
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
+
+  /* add the surfaces so bg-card, text-card-foreground, bg-popover, etc. work */
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
 }
 
-/* ---- App helpers (keep these) ---- */
+/* ---- App helpers ---- */
 body { @apply bg-[radial-gradient(900px_500px_at_20%_-10%,rgba(59,130,246,.12),transparent_60%)] bg-background text-foreground antialiased; }
 .container { @apply max-w-5xl mx-auto px-4; }
-.card { @apply rounded-2xl border border-border bg-[#0e172a]/95 backdrop-blur-md shadow-xl; }
+
+/* ✅ Theme-aware card (no hardcoded dark hex) */
+.card { @apply rounded-2xl border border-border bg-card text-card-foreground backdrop-blur-md shadow-xl; }
+
 .title { @apply font-semibold; }
 .small { @apply text-xs text-muted-foreground; }
 .big { @apply text-2xl font-bold; }
@@ -27,7 +40,6 @@ body { @apply bg-[radial-gradient(900px_500px_at_20%_-10%,rgba(59,130,246,.12),t
 .stack { @apply flex flex-col gap-3; }
 
 /* ---- Tailwind v4 theme tokens via CSS vars ---- */
-/* Replace the neutral palette with a modern blue palette */
 :root {
   --radius: 0.625rem;
 
@@ -42,7 +54,7 @@ body { @apply bg-[radial-gradient(900px_500px_at_20%_-10%,rgba(59,130,246,.12),t
   --popover-foreground: oklch(0.20 0.02 250);
 
   /* primary blues */
-  --primary: oklch(0.60 0.18 255);           /* ~blue-500 */
+  --primary: oklch(0.60 0.18 255);
   --primary-foreground: oklch(0.15 0.02 250);
 
   --secondary: oklch(0.92 0.03 250);
@@ -54,7 +66,7 @@ body { @apply bg-[radial-gradient(900px_500px_at_20%_-10%,rgba(59,130,246,.12),t
   --accent: oklch(0.70 0.16 255);
   --accent-foreground: oklch(0.15 0.02 250);
 
-  --destructive: oklch(0.65 0.21 28);        /* orange/red */
+  --destructive: oklch(0.65 0.21 28);
 
   --border: oklch(0.88 0.02 250);
   --input: var(--border);
@@ -88,7 +100,7 @@ body { @apply bg-[radial-gradient(900px_500px_at_20%_-10%,rgba(59,130,246,.12),t
   --popover: oklch(0.16 0.02 250);
   --popover-foreground: oklch(0.98 0.02 250);
 
-  --primary: oklch(0.72 0.18 255);           /* brighter blue on dark */
+  --primary: oklch(0.72 0.18 255);
   --primary-foreground: oklch(0.14 0.02 250);
 
   --secondary: oklch(0.26 0.02 250);

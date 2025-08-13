@@ -2,31 +2,38 @@ import React, { useEffect, useState } from "react";
 import dayjs from "dayjs";
 import { api } from "./api";
 import { Button } from "./components/ui/button";
+import { Input } from "./components/ui/input";
+import { Textarea } from "./components/ui/textarea";
 import DatePicker from "./DatePicker.jsx";
 import ProgressRing from "./components/ProgressRing.jsx";
 import MonthCalendar from "./components/MonthCalendar.jsx";
 import { appBus } from "./bus";
+import ThemeToggle from "./components/ThemeToggle.jsx";
 
 function TaskCard({ item, onChanged }) {
   const [saving, setSaving] = useState(false);
   const [notes, setNotes] = useState(item.notes || "");
   const [rpe, setRpe] = useState(item.rpe ?? "");
-  const target = item.target || 0;
-  const done = item.repsDone || 0;
+  const unit = item?.templateId?.unit || "reps";
+  const target = Number(item.target || 0);
+  const done = Number(item.repsDone || 0);
   const pct = Math.min(1, done / Math.max(1, target));
 
-  async function add(n){ await api.addReps(item._id, n); await onChanged(); }
-  async function completeSet(){
-    const size = item.setsPlanned?.[item.setsDone?.length ?? 0] || (item.templateId?.defaultSetSize || 10);
+  async function add(n) { await api.addReps(item._id, n); await onChanged(); }
+  async function completeSet() {
+    const nextIndex = (item.setsDone?.length ?? 0);
+    const size = item.setsPlanned?.[nextIndex] ?? item.templateId?.defaultSetSize ?? 10;
     await api.completeSet(item._id, size); await onChanged();
   }
-  async function undo(){ await api.undoLast(item._id); await onChanged(); }
-  async function saveMeta(){
+  async function undo() { await api.undoLast(item._id); await onChanged(); }
+  async function saveMeta() {
     try { setSaving(true);
       await api.setMeta(item._id, { notes, rpe: rpe === "" ? null : Number(rpe) });
       await onChanged();
     } finally { setSaving(false); }
   }
+
+  const firstSetSize = item.setsPlanned?.[0] ?? item.templateId?.defaultSetSize ?? 10;
 
   return (
     <div className="card p-5 md:p-6 space-y-4">
@@ -34,33 +41,55 @@ function TaskCard({ item, onChanged }) {
         <ProgressRing size={56} stroke={8} value={pct} />
         <div className="mr-auto">
           <div className="font-semibold">{item?.templateId?.name || "Task"}</div>
-          <div className="small text-muted-foreground">{done}/{target} reps</div>
+          <div className="small text-muted-foreground">
+            {done}/{target} {unit}
+          </div>
         </div>
-        <div className="small px-2 py-0.5 rounded-full border border-border">{item.status}</div>
+        <div className="small px-2 py-0.5 rounded-full border border-border capitalize">
+          {item.status}
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <Button className="rounded-full px-4" onClick={completeSet}>Complete set (+{item.setsPlanned?.[0] || 10})</Button>
+        <Button className="rounded-full px-4" onClick={completeSet}>Complete set (+{firstSetSize})</Button>
         <Button variant="outline" className="rounded-full px-3" onClick={()=>add(10)}>+10</Button>
         <Button variant="outline" className="rounded-full px-3" onClick={()=>add(5)}>+5</Button>
         <Button variant="outline" className="rounded-full px-3" onClick={()=>add(1)}>+1</Button>
         <Button variant="outline" className="rounded-full px-3" onClick={undo}>Undo</Button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-[1fr_140px_auto] gap-3 items-start">
-        <textarea
-          className="w-full bg-[#0b1324] border border-border rounded-xl h-[88px] p-3 placeholder:text-muted-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+      {/* Controls row */}
+      <div className="grid grid-cols-1 md:grid-cols-[1fr_180px] gap-3 items-start">
+        {/* Notes */}
+        <Textarea
+          className="h-[88px]"               // ← reference height
           placeholder="How did it feel?"
-          value={notes} onChange={(e)=>setNotes(e.target.value)}
+          value={notes}
+          onChange={(e)=>setNotes(e.target.value)}
         />
-        <input
-          type="number" min="1" max="10"
-          className="bg-[#0b1324] border border-border rounded-xl p-3 text-center focus-visible:ring-2 focus-visible:ring-primary/50"
-          value={rpe} onChange={(e)=>setRpe(e.target.value)}
-          placeholder="RPE"
-        />
-        <Button onClick={saveMeta} disabled={saving}>{saving ? "Saving…" : "Save notes/RPE"}</Button>
+
+        {/* RPE + Save stacked to match the textarea height */}
+        <div className="flex flex-col gap-2 md:h-[88px]">
+          <Input
+            type="number"
+            min="1"
+            max="10"
+            placeholder="RPE"
+            value={rpe}
+            onChange={(e)=>setRpe(e.target.value)}
+            className="text-center h-full md:h-0 flex-1"   // split the column height
+          />
+
+          <Button
+            onClick={saveMeta}
+            disabled={saving}
+            className="h-full md:h-0 flex-1"               // split the column height
+          >
+            {saving ? "Saving…" : "Save notes/RPE"}
+          </Button>
+        </div>
       </div>
+
 
       <div className="small text-muted-foreground">
         Planned sets: {item.setsPlanned?.join(" / ") || "—"}
@@ -73,12 +102,10 @@ export default function Today() {
   const [items, setItems] = useState([]);
   const [date, setDate] = useState(dayjs().format("YYYY-MM-DD"));
 
-  // flags to control render order
   const [loadingPlan, setLoadingPlan] = useState(true);
   const [planLoadedOnce, setPlanLoadedOnce] = useState(false);
 
-  // Calendar view + colors
-  const [visibleMonth, setVisibleMonth] = useState(dayjs()); // month being displayed
+  const [visibleMonth, setVisibleMonth] = useState(dayjs());
   const [statusByDate, setStatusByDate] = useState({});
 
   async function loadPlan(d = date) {
@@ -94,18 +121,18 @@ export default function Today() {
 
   async function loadMonthStatus(m = visibleMonth) {
     const from = m.startOf("month").format("YYYY-MM-DD");
-    const to   = m.endOf("month").format("YYYY-MM-DD");
+    const to = m.endOf("month").format("YYYY-MM-DD");
     const s = await api.statsSummary(from, to);
 
     const map = {};
-    for (const d of (s?.days ?? [])) {
+    for (const d of s?.days ?? []) {
       const done = Number(d?.done ?? 0);
       const target = Number(d?.target ?? 0);
       let status = "none";
       if (target > 0) {
         if (done >= target) status = "done";
-        else if (done > 0)  status = "partial";
-        else                status = "missed";
+        else if (done > 0) status = "partial";
+        else status = "missed";
       } else if (done > 0) {
         status = "partial";
       }
@@ -118,35 +145,24 @@ export default function Today() {
     await Promise.all([loadPlan(d), loadMonthStatus(visibleMonth)]);
   }
 
-  // sync plan + calendar month with selected date
   useEffect(() => {
     loadPlan(date);
     setVisibleMonth(dayjs(date));
   }, [date]);
 
-  // reload month colors when month changes
   useEffect(() => {
     loadMonthStatus(visibleMonth);
   }, [visibleMonth]);
 
-  // single, non-nested listener effect
   useEffect(() => {
-    const handler = () => {
-      (async () => {
-        await Promise.all([loadPlan(date), loadMonthStatus(visibleMonth)]);
-      })();
-    };
+    const handler = () => { (async () => { await Promise.all([loadPlan(date), loadMonthStatus(visibleMonth)]); })(); };
 
     appBus.addEventListener("templates:changed", handler);
 
-    const onStorage = (e) => {
-      if (e.key === "templates:changed") handler();
-    };
+    const onStorage = (e) => { if (e.key === "templates:changed") handler(); };
     window.addEventListener("storage", onStorage);
 
-    const onVisibility = () => {
-      if (!document.hidden) handler();
-    };
+    const onVisibility = () => { if (!document.hidden) handler(); };
     document.addEventListener("visibilitychange", onVisibility);
 
     return () => {
@@ -160,6 +176,16 @@ export default function Today() {
   function nextDay() { setDate(dayjs(date).add(1, "day").format("YYYY-MM-DD")); }
   function today()   { setDate(dayjs().format("YYYY-MM-DD")); }
 
+  // Group items by group label
+  const grouped = Object.entries(
+    (items || []).reduce((acc, it) => {
+      const g = (it.group || it.templateId?.group || "").trim() || "Ungrouped";
+      if (!acc[g]) acc[g] = [];
+      acc[g].push(it);
+      return acc;
+    }, {})
+  ).sort(([ga], [gb]) => ga.localeCompare(gb));
+
   return (
     <div className="stack">
       {/* Date bar */}
@@ -170,14 +196,19 @@ export default function Today() {
         <Button variant="outline" onClick={today}>Today</Button>
       </div>
 
-      {/* Tasks first, calendar stays at bottom */}
+      {/* Tasks grouped by group */}
       {loadingPlan && !planLoadedOnce ? null : (
-        items.map((it) => (
-          <TaskCard key={it._id} item={it} onChanged={() => refreshAll(date)} />
+        grouped.map(([groupName, rows]) => (
+          <div key={groupName} className="space-y-3">
+            <div className="px-1 text-sm font-semibold text-muted-foreground">{groupName}</div>
+            {rows.map((it) => (
+              <TaskCard key={it._id} item={it} onChanged={() => refreshAll(date)} />
+            ))}
+          </div>
         ))
       )}
 
-      {/* Calendar at the bottom; selected day highlight persists */}
+      {/* Calendar */}
       {planLoadedOnce && (
         <MonthCalendar
           month={visibleMonth}
@@ -191,12 +222,12 @@ export default function Today() {
             setDate(prev.date(clamped).format("YYYY-MM-DD"));
           }}
           onNext={() => {
-            const next = visibleMonth.add(1, "month"); // allow viewing future months
+            const next = visibleMonth.add(1, "month");
             setVisibleMonth(next);
             const dayNum = dayjs(date).date();
             const clamped = Math.min(dayNum, next.daysInMonth());
             let newSel = next.date(clamped);
-            if (newSel.isAfter(dayjs(), "day")) newSel = dayjs(); // avoid selecting future day
+            if (newSel.isAfter(dayjs(), "day")) newSel = dayjs();
             setDate(newSel.format("YYYY-MM-DD"));
           }}
           onSelect={(dateStr) => setDate(dateStr)}

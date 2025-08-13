@@ -21,17 +21,13 @@ app.use(cookieParser());
 async function connectMongo() {
   try {
     if (!process.env.MONGODB_URI) {
-        console.error('Missing MONGODB_URI in .env');
-        process.exit(1);
+      console.error('Missing MONGODB_URI in .env');
+      process.exit(1);
     }
-
-    // Optional: log masked URI to confirm it’s loaded
     const masked = process.env.MONGODB_URI.replace(/\/\/([^:]+):([^@]+)@/, '//$1:<redacted>@');
     console.log('Connecting to MongoDB:', masked);
 
-    await mongoose.connect(process.env.MONGODB_URI, {
-      // Atlas uses TLS by default; no extra opts needed.
-    });
+    await mongoose.connect(process.env.MONGODB_URI);
     console.log('✅ MongoDB connected');
   } catch (err) {
     console.error('❌ MongoDB connection error:', err.message);
@@ -45,11 +41,7 @@ const UserSchema = new mongoose.Schema({
   email: { type: String, unique: true },
   passwordHash: String,
   tz: { type: String, default: 'Australia/Sydney' },
-
-  // refresh token fingerprints (hashes)
   refreshHashes: [String],
-
-  // password reset
   reset: {
     tokenHash: String,
     expiresAt: Date
@@ -60,23 +52,27 @@ const TaskTemplateSchema = new mongoose.Schema({
   userId: { type: mongoose.Types.ObjectId, ref: 'User' },
   name: String,
   unit: { type: String, default: 'reps' },          // reps | minutes | distance
-  dailyTarget: Number,                              // e.g., 200
-  defaultSetSize: Number,                           // e.g., 20
+  dailyTarget: Number,
+  defaultSetSize: Number,
   schedule: {
-    type: { type: String, default: 'weekly' },      // MVP: weekly
+    type: { type: String, default: 'weekly' },
     daysOfWeek: [Number],                           // 0..6 (Sun..Sat)
-    startDate: String,                              // 'YYYY-MM-DD'
+    startDate: String,
     endDate: { type: String, default: null }
   },
   active: { type: Boolean, default: true },
 
-  progression: {                                    // linear weekly progression
-    weeklyPct: { type: Number, default: 0 },        // e.g., 5 => +5% per week
-    cap: { type: Number, default: null }            // max target value
+  // classification & grouping
+  kind: { type: String, enum: ['calisthenics', 'gym'], default: 'calisthenics' },
+  group: { type: String, default: '' },
+
+  progression: {
+    weeklyPct: { type: Number, default: 0 },
+    cap: { type: Number, default: null }
   },
-  deloadRule: {                                     // deload every N weeks
-    everyNWeeks: { type: Number, default: 0 },      // e.g., 4 => every 4th week
-    scale: { type: Number, default: 0.7 }           // e.g., 0.7 => 70% on deload
+  deloadRule: {
+    everyNWeeks: { type: Number, default: 0 },
+    scale: { type: Number, default: 0.7 }
   }
 }, { timestamps: true });
 
@@ -84,13 +80,14 @@ const DailyInstanceSchema = new mongoose.Schema({
   userId: { type: mongoose.Types.ObjectId, ref: 'User' },
   templateId: { type: mongoose.Types.ObjectId, ref: 'TaskTemplate' },
   date: String,                       // 'YYYY-MM-DD'
-  target: Number,                     // snapshot of target at creation
-  setsPlanned: [Number],              // planned set sizes (e.g., [20,20,...])
-  setsDone: [Number],                 // actual completions, partials allowed
+  target: Number,
+  setsPlanned: [Number],
+  setsDone: [Number],
   repsDone: { type: Number, default: 0 },
-  status: { type: String, default: 'on-track' }, // ontrack|ahead|behind|done
+  status: { type: String, default: 'on-track' }, // on-track|ahead|behind|done
   notes: String,
-  rpe: Number
+  rpe: Number,
+  group: { type: String, default: '' }           // snapshot of template.group
 }, { timestamps: true });
 
 // Ensure only one DailyInstance per user/template/date
@@ -148,7 +145,6 @@ function computeStatus(repsDone, target) {
 }
 
 function weeksSince(startDate, date) {
-  // number of full weeks since startDate (0 for first week)
   const start = dayjs(startDate).startOf('day');
   const d = dayjs(date).startOf('day');
   if (!start.isValid() || !d.isValid()) return 0;
@@ -159,21 +155,18 @@ function weeksSince(startDate, date) {
 function computeTargetWithRules(tpl, date) {
   let target = tpl.dailyTarget;
 
-  // progression: linear by week
   const w = weeksSince(tpl.schedule?.startDate || date, date);
   if (tpl.progression?.weeklyPct && tpl.progression.weeklyPct !== 0) {
     const inc = Math.floor(target * (tpl.progression.weeklyPct / 100) * w);
     target = target + inc;
   }
 
-  // cap
   if (tpl.progression?.cap && tpl.progression.cap > 0) {
     target = Math.min(target, tpl.progression.cap);
   }
 
-  // deload: if everyNWeeks > 0 and we’re on that week number
   if (tpl.deloadRule?.everyNWeeks > 0) {
-    const weekNumber = w + 1; // human-friendly (first week = 1)
+    const weekNumber = w + 1;
     if (weekNumber % tpl.deloadRule.everyNWeeks === 0) {
       const scale = tpl.deloadRule.scale || 0.7;
       target = Math.floor(target * scale);
@@ -188,7 +181,7 @@ function signAccess(uid) {
   return jwt.sign({ uid }, process.env.JWT_SECRET, { expiresIn: ACCESS_TTL });
 }
 function makeRefresh() {
-  return crypto.randomBytes(48).toString('base64url'); // opaque token
+  return crypto.randomBytes(48).toString('base64url');
 }
 function sha256(x) {
   return crypto.createHash('sha256').update(x).digest('hex');
@@ -209,13 +202,10 @@ function arraysEqual(a = [], b = []) {
   return true;
 }
 
-// Idempotent & race-safe: removes stale rows, updates changed ones, upserts missing ones,
-// and deduplicates if any pre-exist. Safe under concurrent /plan calls.
+// Materialize/repair the plan for a date
 async function materializeForDate(userId, date) {
-  // Load active templates and existing dailies for the date
   const templates = await TaskTemplate.find({ userId, active: true }).lean();
   const tplById = new Map(templates.map(t => [t._id.toString(), t]));
-
   const existing = await DailyInstance.find({ userId, date }).lean();
 
   // (A) Remove rows whose template is gone or inactive on that date
@@ -241,7 +231,7 @@ async function materializeForDate(userId, date) {
     await DailyInstance.deleteMany({ _id: { $in: dupDelete } });
   }
 
-  // (C) Update snapshots for still-valid rows if template-derived fields changed
+  // (C) Update snapshots if template-derived fields changed
   const cleaned = await DailyInstance.find({ userId, date }).lean();
   for (const di of cleaned) {
     const tpl = tplById.get(di.templateId.toString());
@@ -249,14 +239,21 @@ async function materializeForDate(userId, date) {
 
     const newTarget = computeTargetWithRules(tpl, date);
     const newSets = planSets(newTarget, tpl.defaultSetSize || newTarget);
+    const newGroup = tpl.group || '';
 
-    if (di.target !== newTarget || !arraysEqual(di.setsPlanned, newSets)) {
+    const needsUpdate =
+      di.target !== newTarget ||
+      !arraysEqual(di.setsPlanned, newSets) ||
+      (di.group || '') !== newGroup;
+
+    if (needsUpdate) {
       await DailyInstance.updateOne(
         { _id: di._id },
         {
           $set: {
             target: newTarget,
             setsPlanned: newSets,
+            group: newGroup,
             status: computeStatus(di.repsDone || 0, newTarget)
           }
         }
@@ -264,8 +261,7 @@ async function materializeForDate(userId, date) {
     }
   }
 
-  // (D) Upsert missing rows (race-safe). No manual createdAt/updatedAt here.
-  // Mongoose will add them when we pass { timestamps: true } to bulkWrite.
+  // (D) Upsert missing rows (disable timestamps in the upsert to avoid updatedAt conflicts)
   const ops = [];
   for (const tpl of templates) {
     if (!isActiveOnDate(tpl, date)) continue;
@@ -277,8 +273,6 @@ async function materializeForDate(userId, date) {
       updateOne: {
         filter: { userId, templateId: tpl._id, date },
         update: {
-          // If the doc exists, we don't change the snapshot here; step (C) already handles updates.
-          // On insert, we seed the document.
           $setOnInsert: {
             userId,
             templateId: tpl._id,
@@ -287,25 +281,24 @@ async function materializeForDate(userId, date) {
             setsPlanned: newSets,
             setsDone: [],
             repsDone: 0,
-            status: 'on-track'
+            status: 'on-track',
+            group: tpl.group || ''
           }
         },
-        upsert: true
+        upsert: true,
+        timestamps: false // 👈 prevent Mongoose from writing updatedAt in both places
       }
     });
   }
 
   if (ops.length) {
     try {
-      // Important: let Mongoose add updatedAt/createdAt automatically.
-      await DailyInstance.bulkWrite(ops, { ordered: false, timestamps: true });
+      await DailyInstance.bulkWrite(ops, { ordered: false });
     } catch (err) {
-      // Ignore duplicate key races from concurrent requests
-      if (err?.code !== 11000) throw err;
+      if (err?.code !== 11000) throw err; // swallow dup races
     }
   }
 }
-
 
 // --- Routes: Auth ---
 app.post('/auth/register', async (req, res) => {
@@ -315,16 +308,17 @@ app.post('/auth/register', async (req, res) => {
   const exists = await User.findOne({ email });
   if (exists) return res.status(400).json({ error: 'Email already registered' });
 
-  const passwordHash = await bcrypt.hash(password, 12); // stronger cost
+  const passwordHash = await bcrypt.hash(password, 12);
   const user = await User.create({ email, passwordHash, tz: tz || 'Australia/Sydney' });
 
   const access = signAccess(user._id.toString());
   const refresh = makeRefresh();
   const hash = sha256(refresh);
-  await User.updateOne({ _id: user._id }, { $push: { refreshHashes: hash } });
+
+  // only addToSet (avoid duplicate/conflict)
   await User.updateOne({ _id: user._id }, { $addToSet: { refreshHashes: hash } });
 
-  setRefreshCookie(res, refresh); // httpOnly cookie
+  setRefreshCookie(res, refresh);
   res.json({ token: access, user: { id: user._id, email: user.email, tz: user.tz } });
 });
 
@@ -340,7 +334,6 @@ app.post('/auth/login', async (req, res) => {
   const refresh = makeRefresh();
   const hash = sha256(refresh);
 
-  // Avoid duplicates on retries
   await User.updateOne({ _id: user._id }, { $addToSet: { refreshHashes: hash } });
 
   setRefreshCookie(res, refresh);
@@ -362,14 +355,11 @@ app.post('/auth/refresh', async (req, res) => {
 
   const access = signAccess(user._id.toString());
 
-  // rotate: remove old, then add new
+  // rotate
   const newRefresh = makeRefresh();
   const newHash = sha256(newRefresh);
 
-  // step 1: pull old hash
   await User.updateOne({ _id: user._id }, { $pull: { refreshHashes: oldHash } });
-
-  // step 2: add new hash (addToSet prevents dupes)
   await User.updateOne({ _id: user._id }, { $addToSet: { refreshHashes: newHash } });
 
   setRefreshCookie(res, newRefresh);
@@ -388,14 +378,11 @@ app.post('/auth/logout', async (req, res) => {
 app.post('/auth/forgot-password', async (req, res) => {
   const { email } = req.body;
   const user = await User.findOne({ email });
-  // Return 200 regardless (don’t leak accounts)
   if (user) {
     const token = crypto.randomBytes(32).toString('base64url');
     const tokenHash = sha256(token);
     const expiresAt = new Date(Date.now() + 1000 * 60 * 30); // 30 min
     await User.updateOne({ _id: user._id }, { $set: { reset: { tokenHash, expiresAt } } });
-
-    // DEV: print the link. In prod, email it.
     const resetUrl = `http://localhost:5173/reset?token=${token}&email=${encodeURIComponent(email)}`;
     console.log('🔐 Password reset link:', resetUrl);
   }
@@ -415,15 +402,14 @@ app.post('/auth/reset-password', async (req, res) => {
   const passwordHash = await bcrypt.hash(password, 12);
   await User.updateOne({ _id: user._id }, { 
     $set: { passwordHash }, 
-    $unset: { reset: 1 }, 
-    $setOnInsert: {} 
+    $unset: { reset: 1 }
   });
   res.json({ ok: true });
 });
 
 // --- Routes: Templates ---
 app.post('/templates', auth, async (req, res) => {
-  const { name, unit = 'reps', dailyTarget, defaultSetSize, schedule } = req.body;
+  const { name, unit = 'reps', dailyTarget, defaultSetSize, schedule, kind = 'calisthenics', group = '' } = req.body;
   if (!name || !dailyTarget) return res.status(400).json({ error: 'name & dailyTarget required' });
   const tpl = await TaskTemplate.create({
     userId: req.userId,
@@ -437,7 +423,9 @@ app.post('/templates', auth, async (req, res) => {
       startDate: dayjs().format('YYYY-MM-DD'),
       endDate: null
     },
-    active: true
+    active: true,
+    kind,      // 👈 ensure these are saved
+    group      // 👈 ensure these are saved
   });
   res.json(tpl);
 });
@@ -473,10 +461,45 @@ app.get('/plan', auth, async (req, res) => {
   res.json(plan);
 });
 
+// Seed examples (optional)
+app.post('/templates/seed', auth, async (req, res) => {
+  const today = dayjs().format('YYYY-MM-DD');
+
+  const samples = [
+    {
+      name: 'New Calisthenics Template',
+      kind: 'calisthenics',
+      group: 'Push Day',
+      unit: 'reps',
+      dailyTarget: 120,
+      defaultSetSize: 15,
+      schedule: { type: 'weekly', daysOfWeek: [1,3,5], startDate: today, endDate: null },
+      progression: { weeklyPct: 5, cap: 200 },
+      deloadRule: { everyNWeeks: 4, scale: 0.7 }
+    },
+    {
+      name: 'Gym Template – Back (Lat Pulldown)',
+      kind: 'gym',
+      group: 'Back Day',
+      unit: 'reps',
+      dailyTarget: 60,
+      defaultSetSize: 10,
+      schedule: { type: 'weekly', daysOfWeek: [2,5], startDate: today, endDate: null },
+      progression: { weeklyPct: 3, cap: 100 },
+      deloadRule: { everyNWeeks: 6, scale: 0.75 }
+    }
+  ];
+
+  const created = await TaskTemplate.insertMany(
+    samples.map(s => ({ ...s, userId: req.userId }))
+  );
+  res.json(created);
+});
+
 // --- Routes: Stats ---
 app.get('/stats/summary', auth, async (req, res) => {
-  const to = req.query.to ? dayjs(req.query.to) : dayjs();                 // default today
-  const from = req.query.from ? dayjs(req.query.from) : to.subtract(27, 'day'); // default 28 days
+  const to = req.query.to ? dayjs(req.query.to) : dayjs();
+  const from = req.query.from ? dayjs(req.query.from) : to.subtract(27, 'day');
 
   const fromStr = from.format('YYYY-MM-DD');
   const toStr = to.format('YYYY-MM-DD');
@@ -486,7 +509,6 @@ app.get('/stats/summary', auth, async (req, res) => {
     date: { $gte: fromStr, $lte: toStr }
   }).lean();
 
-  // Build a map by date
   const byDate = new Map();
   for (let d = from.startOf('day'); !d.isAfter(to, 'day'); d = d.add(1, 'day')) {
     byDate.set(d.format('YYYY-MM-DD'), []);
@@ -496,7 +518,6 @@ app.get('/stats/summary', auth, async (req, res) => {
     if (byDate.has(k)) byDate.get(k).push(it);
   });
 
-  // Derive per-day totals and compliance
   const days = [];
   let currentStreak = 0;
   let longestStreak = 0;
@@ -521,7 +542,6 @@ app.get('/stats/summary', auth, async (req, res) => {
   const metDays = days.filter(d => d.met).length;
   const compliancePct = scheduledDays ? Math.round((metDays / scheduledDays) * 100) : 0;
 
-  // weekly buckets (simple 7-day chunks from `from`)
   const weeks = [];
   for (let i = 0; i < days.length; i += 7) {
     const slice = days.slice(i, i + 7);

@@ -1,15 +1,14 @@
 import React from "react";
 import dayjs from "dayjs";
 
-const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 /**
  * Props:
- *  - month: dayjs() anywhere inside the month to render
+ *  - month: dayjs()
  *  - statusByDate: { "YYYY-MM-DD": "done" | "partial" | "missed" | "none" }
  *  - selectedDate: "YYYY-MM-DD"
- *  - onPrev, onNext: month nav handlers
- *  - onSelect(dateStr): click a day
+ *  - onPrev, onNext, onSelect(dateStr)
  */
 export default function MonthCalendar({
   month,
@@ -46,31 +45,30 @@ export default function MonthCalendar({
   function colorFor(dateStr, inMonth) {
     const status = statusByDate[dateStr] || "none";
     if (!inMonth) return "bg-transparent text-muted-foreground/50 border-transparent";
-    if (status === "done")     return "bg-emerald-600/30 border-emerald-600/50";
-    if (status === "partial")  return "bg-amber-500/30 border-amber-500/50";
-    if (status === "missed")   return "bg-rose-600/30 border-rose-600/50";
-    return "bg-[#0b1324] border-border";
+    if (status === "done") return "bg-emerald-600/30 border-emerald-600/50";
+    if (status === "partial") return "bg-amber-500/30 border-amber-500/50";
+    if (status === "missed") return "bg-rose-600/30 border-rose-600/50";
+    // "no data" -> theme aware
+    return "bg-secondary border-border";
   }
 
   return (
     <div className="card p-4 md:p-6">
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
-        <div className="text-lg md:text-xl font-semibold">
-          {startOfMonth.format("MMMM YYYY")}
-        </div>
+        <div className="text-lg md:text-xl font-semibold">{startOfMonth.format("MMMM YYYY")}</div>
         <div className="flex gap-2">
           <button
             type="button"
             onClick={onPrev}
-            className="px-3 py-1 rounded-lg border border-border hover:bg-white/5 outline-none focus:outline-none"
+            className="px-3 py-1 rounded-lg border border-border hover:bg-muted outline-none"
           >
             ‹
           </button>
           <button
             type="button"
             onClick={onNext}
-            className="px-3 py-1 rounded-lg border border-border hover:bg-white/5 outline-none focus:outline-none"
+            className="px-3 py-1 rounded-lg border border-border hover:bg-muted outline-none"
           >
             ›
           </button>
@@ -79,8 +77,10 @@ export default function MonthCalendar({
 
       {/* Weekday headers */}
       <div className="grid grid-cols-7 gap-2 mb-2 small text-muted-foreground">
-        {DOW.map(d => (
-          <div key={d} className="text-center">{d}</div>
+        {DOW.map((d) => (
+          <div key={d} className="text-center">
+            {d}
+          </div>
         ))}
       </div>
 
@@ -97,26 +97,22 @@ export default function MonthCalendar({
               type="button"
               onClick={() => onSelect?.(dateStr)}
               className={[
-                "relative h-16 md:h-20 lg:h-24 w-full rounded-xl border",
-                "outline-none focus:outline-none focus:ring-0 active:ring-0 focus-visible:ring-0",
+                "relative h-16 md:h-20 lg:h-24 w-full rounded-xl border transition-colors",
+                "outline-none focus:outline-none",
                 colorFor(dateStr, inMonth),
-                inMonth ? "hover:bg-white/5" : ""
+                inMonth ? "hover:bg-muted" : "",
               ].join(" ")}
               title={dateStr}
             >
-              {/* Selected overlay (stable, won’t get overridden) */}
-              {isSelected && (
-                <div className="pointer-events-none absolute inset-0 rounded-xl ring-2 ring-blue-400" />
-              )}
+              {/* Selected overlay (stable) */}
+              {isSelected && <div className="pointer-events-none absolute inset-0 rounded-xl ring-2 ring-[var(--ring)]" />}
               {/* Today (only if not selected) */}
               {!isSelected && isToday && (
-                <div className="pointer-events-none absolute inset-0 rounded-xl ring-1 ring-blue-500/70" />
+                <div className="pointer-events-none absolute inset-0 rounded-xl ring-1 ring-[var(--ring)]/70" />
               )}
 
               <div className="flex h-full w-full items-start justify-start p-2">
-                <span className={inMonth ? "text-sm md:text-base" : "text-sm opacity-60"}>
-                  {date.date()}
-                </span>
+                <span className={inMonth ? "text-sm md:text-base" : "text-sm opacity-60"}>{date.date()}</span>
               </div>
             </button>
           );
@@ -124,7 +120,7 @@ export default function MonthCalendar({
       </div>
 
       {/* Legend */}
-      <div className="mt-4 flex items-center gap-4 small text-muted-foreground">
+      <div className="mt-4 flex flex-wrap items-center gap-4 small text-muted-foreground">
         <span className="inline-flex items-center gap-2">
           <span className="h-3 w-3 rounded bg-emerald-600/70 inline-block" />
           Done
@@ -138,11 +134,11 @@ export default function MonthCalendar({
           Missed
         </span>
         <span className="inline-flex items-center gap-2">
-          <span className="h-3 w-3 rounded bg-[#0b1324] border border-border inline-block" />
+          <span className="h-3 w-3 rounded bg-secondary inline-block border border-border" />
           No data
         </span>
         <span className="inline-flex items-center gap-2">
-          <span className="h-3 w-3 rounded ring-1 ring-blue-500 inline-block" />
+          <span className="h-3 w-3 rounded ring-1 ring-[var(--ring)] inline-block" />
           Today
         </span>
       </div>

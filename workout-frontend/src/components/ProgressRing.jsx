@@ -12,30 +12,60 @@ export default function ProgressRing({ size=64, stroke=8, value=0, label }) {
   const dash = c * (1 - clamped);
 
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="overflow-visible">
-      <circle cx={size/2} cy={size/2} r={r} stroke="rgba(255,255,255,0.12)" strokeWidth={stroke} fill="none" />
+    <svg
+      width={size}
+      height={size}
+      viewBox={`0 0 ${size} ${size}`}
+      className="overflow-visible text-foreground"
+    >
+      {/* track */}
       <circle
-        cx={size/2} cy={size/2} r={r}
-        stroke="url(#grad)"
-        strokeWidth={stroke} fill="none"
-        strokeDasharray={c} strokeDashoffset={dash}
+        cx={size/2}
+        cy={size/2}
+        r={r}
+        stroke="var(--border)"
+        strokeWidth={stroke}
+        fill="none"
+      />
+      {/* progress */}
+      <defs>
+        <linearGradient id="ring-grad" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" style={{ stopColor: "var(--primary)" }} />
+          <stop offset="100%" style={{ stopColor: "color-mix(in oklab, var(--primary) 70%, white 30%)" }} />
+        </linearGradient>
+      </defs>
+      <circle
+        cx={size/2}
+        cy={size/2}
+        r={r}
+        stroke="url(#ring-grad)"
+        strokeWidth={stroke}
+        fill="none"
+        strokeDasharray={c}
+        strokeDashoffset={dash}
         strokeLinecap="round"
         transform={`rotate(-90 ${size/2} ${size/2})`}
       />
-      <defs>
-        <linearGradient id="grad" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#60a5fa" />
-          <stop offset="100%" stopColor="#93c5fd" />
-        </linearGradient>
-      </defs>
+
+      {/* % label */}
       <text
-        x="50%" y="50%" dominantBaseline="central" textAnchor="middle"
-        className="fill-white/90 text-sm font-semibold select-none"
+        x="50%"
+        y="50%"
+        dominantBaseline="central"
+        textAnchor="middle"
+        fill="currentColor"
+        className="text-sm font-semibold select-none opacity-90"
       >
         {Math.round(clamped*100)}%
       </text>
       {label ? (
-        <text x="50%" y={size - 6} textAnchor="middle" className="fill-white/60 text-[10px] select-none">
+        <text
+          x="50%"
+          y={size - 6}
+          textAnchor="middle"
+          fill="currentColor"
+          className="text-[10px] select-none opacity-60"
+        >
           {label}
         </text>
       ) : null}
