@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import dayjs from "dayjs";
 import { api } from "./api";
 import { Button } from "./components/ui/button";
@@ -10,14 +10,31 @@ import MonthCalendar from "./components/MonthCalendar.jsx";
 import { appBus } from "./bus";
 import ThemeToggle from "./components/ThemeToggle.jsx";
 
+function useDebouncedEffect(fn, deps, delay = 500) {
+  useEffect(() => {
+    const id = setTimeout(fn, delay);
+    return () => clearTimeout(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [...deps, delay]);
+}
+
 function TaskCard({ item, onChanged }) {
   const [saving, setSaving] = useState(false);
   const [notes, setNotes] = useState(item.notes || "");
   const [rpe, setRpe] = useState(item.rpe ?? "");
+  const [weight, setWeight] = useState(item.weight ?? item.meta?.weight ?? ""); // user actual
+  const [showFeedback, setShowFeedback] = useState(false); // NEW: feedback toggle (default hidden)
+
   const unit = item?.templateId?.unit || "reps";
   const target = Number(item.target || 0);
   const done = Number(item.repsDone || 0);
   const pct = Math.min(1, done / Math.max(1, target));
+
+  const isGym = item?.templateId?.kind === "gym";
+  const targetWeight = isGym ? (item?.templateId?.weight ?? null) : null;
+
+  // NEW: show the "of Xkg" suffix only when gym + weight > 0
+  const showTargetWeightText = isGym && Number(targetWeight) > 0;
 
   async function add(n) { await api.addReps(item._id, n); await onChanged(); }
   async function completeSet() {
@@ -27,11 +44,25 @@ function TaskCard({ item, onChanged }) {
   }
   async function undo() { await api.undoLast(item._id); await onChanged(); }
   async function saveMeta() {
-    try { setSaving(true);
-      await api.setMeta(item._id, { notes, rpe: rpe === "" ? null : Number(rpe) });
+    try {
+      setSaving(true);
+      await api.setMeta(item._id, {
+        notes,
+        rpe: rpe === "" ? null : Number(rpe),
+        // weight is autosaved separately
+      });
       await onChanged();
     } finally { setSaving(false); }
   }
+
+  // --- Autosave ACTUAL weight (debounced) ---
+  useDebouncedEffect(() => {
+    if (!isGym) return;
+    (async () => {
+      await api.setMeta(item._id, { weight: weight === "" ? null : Number(weight) });
+      await onChanged();
+    })();
+  }, [weight], 600);
 
   const firstSetSize = item.setsPlanned?.[0] ?? item.templateId?.defaultSetSize ?? 10;
 
@@ -39,14 +70,56 @@ function TaskCard({ item, onChanged }) {
     <div className="card p-5 md:p-6 space-y-4">
       <div className="flex items-center gap-3">
         <ProgressRing size={56} stroke={8} value={pct} />
-        <div className="mr-auto">
-          <div className="font-semibold">{item?.templateId?.name || "Task"}</div>
+
+        <div className="mr-auto min-w-0">
+          <div className="font-semibold flex flex-wrap items-center gap-2">
+            <span className="truncate">{item?.templateId?.name || "Task"}</span>
+
+            {/* Show target + actual for Gym inline */}
+            {isGym && (
+              <>
+                {targetWeight != null && (
+                  <span className="small px-2 py-0.5 rounded-full border border-border">
+                    Target: {targetWeight} kg
+                  </span>
+                )}
+
+                <span className="small text-muted-foreground">•</span>
+
+                <label className="inline-flex items-center gap-2 small">
+                  <span className="opacity-80">Actual:</span>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    className="h-8 w-[90px] rounded-lg border border-input bg-background text-center outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:border-ring"
+                    placeholder="kg"
+                    value={weight}
+                    onChange={(e)=>setWeight(e.target.value)}
+                  />
+                  <span className="opacity-80">kg</span>
+                </label>
+              </>
+            )}
+          </div>
+
           <div className="small text-muted-foreground">
-            {done}/{target} {unit}
+            {done}/{target} {unit}{showTargetWeightText ? ` of ${targetWeight}kg` : ""}
           </div>
         </div>
-        <div className="small px-2 py-0.5 rounded-full border border-border capitalize">
-          {item.status}
+
+        <div className="flex items-center gap-2">
+          <div className="small px-2 py-0.5 rounded-full border border-border capitalize">
+            {item.status}
+          </div>
+          {/* NEW: Toggle button to show/hide feedback inputs */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="rounded-full"
+            onClick={() => setShowFeedback((s) => !s)}
+          >
+            {showFeedback ? "Hide feedback" : "Add feedback"}
+          </Button>
         </div>
       </div>
 
@@ -58,38 +131,32 @@ function TaskCard({ item, onChanged }) {
         <Button variant="outline" className="rounded-full px-3" onClick={undo}>Undo</Button>
       </div>
 
-      {/* Controls row */}
-      <div className="grid grid-cols-1 md:grid-cols-[1fr_180px] gap-3 items-start">
-        {/* Notes */}
-        <Textarea
-          className="h-[88px]"               // ← reference height
-          placeholder="How did it feel?"
-          value={notes}
-          onChange={(e)=>setNotes(e.target.value)}
-        />
-
-        {/* RPE + Save stacked to match the textarea height */}
-        <div className="flex flex-col gap-2 md:h-[88px]">
-          <Input
-            type="number"
-            min="1"
-            max="10"
-            placeholder="RPE"
-            value={rpe}
-            onChange={(e)=>setRpe(e.target.value)}
-            className="text-center h-full md:h-0 flex-1"   // split the column height
+      {/* Notes / RPE / Save (toggled) */}
+      {showFeedback && (
+        <div className="grid grid-cols-1 md:grid-cols-[1fr_220px] gap-3 items-start">
+          <Textarea
+            className="h-[88px]"
+            placeholder="How did it feel?"
+            value={notes}
+            onChange={(e)=>setNotes(e.target.value)}
           />
 
-          <Button
-            onClick={saveMeta}
-            disabled={saving}
-            className="h-full md:h-0 flex-1"               // split the column height
-          >
-            {saving ? "Saving…" : "Save notes/RPE"}
-          </Button>
+          <div className="flex flex-col gap-2 md:h-[88px]">
+            <Input
+              type="number"
+              min="1"
+              max="10"
+              placeholder="RPE"
+              value={rpe}
+              onChange={(e)=>setRpe(e.target.value)}
+              className="h-full md:h-0 flex-1 text-center"
+            />
+            <Button onClick={saveMeta} disabled={saving} className="h-full md:h-0 flex-1">
+              {saving ? "Saving…" : "Save notes/RPE"}
+            </Button>
+          </div>
         </div>
-      </div>
-
+      )}
 
       <div className="small text-muted-foreground">
         Planned sets: {item.setsPlanned?.join(" / ") || "—"}
@@ -145,26 +212,16 @@ export default function Today() {
     await Promise.all([loadPlan(d), loadMonthStatus(visibleMonth)]);
   }
 
-  useEffect(() => {
-    loadPlan(date);
-    setVisibleMonth(dayjs(date));
-  }, [date]);
-
-  useEffect(() => {
-    loadMonthStatus(visibleMonth);
-  }, [visibleMonth]);
+  useEffect(() => { loadPlan(date); setVisibleMonth(dayjs(date)); }, [date]);
+  useEffect(() => { loadMonthStatus(visibleMonth); }, [visibleMonth]);
 
   useEffect(() => {
     const handler = () => { (async () => { await Promise.all([loadPlan(date), loadMonthStatus(visibleMonth)]); })(); };
-
     appBus.addEventListener("templates:changed", handler);
-
     const onStorage = (e) => { if (e.key === "templates:changed") handler(); };
     window.addEventListener("storage", onStorage);
-
     const onVisibility = () => { if (!document.hidden) handler(); };
     document.addEventListener("visibilitychange", onVisibility);
-
     return () => {
       appBus.removeEventListener("templates:changed", handler);
       window.removeEventListener("storage", onStorage);
@@ -176,7 +233,6 @@ export default function Today() {
   function nextDay() { setDate(dayjs(date).add(1, "day").format("YYYY-MM-DD")); }
   function today()   { setDate(dayjs().format("YYYY-MM-DD")); }
 
-  // Group items by group label
   const grouped = Object.entries(
     (items || []).reduce((acc, it) => {
       const g = (it.group || it.templateId?.group || "").trim() || "Ungrouped";
@@ -188,7 +244,6 @@ export default function Today() {
 
   return (
     <div className="stack">
-      {/* Date bar */}
       <div className="card p-3 md:p-4 flex items-center gap-2">
         <Button variant="outline" size="icon" onClick={prevDay}>←</Button>
         <DatePicker value={date} onChange={setDate} />
@@ -196,7 +251,6 @@ export default function Today() {
         <Button variant="outline" onClick={today}>Today</Button>
       </div>
 
-      {/* Tasks grouped by group */}
       {loadingPlan && !planLoadedOnce ? null : (
         grouped.map(([groupName, rows]) => (
           <div key={groupName} className="space-y-3">
@@ -208,7 +262,6 @@ export default function Today() {
         ))
       )}
 
-      {/* Calendar */}
       {planLoadedOnce && (
         <MonthCalendar
           month={visibleMonth}

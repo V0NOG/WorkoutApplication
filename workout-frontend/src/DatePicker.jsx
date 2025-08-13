@@ -5,8 +5,16 @@ import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover
 import { Calendar } from "./components/ui/calendar";
 import { Button } from "./components/ui/button";
 
-export default function DatePicker({ value, onChange }) {
-  const date = new Date(value);
+export default function DatePicker({ value, onChange, placeholder = "Pick a date" }) {
+  const date = value ? new Date(value) : null;
+  const invalid = !date || isNaN(date.getTime());
+
+  // Match input styling (same as Templates.jsx inputs)
+  const inputLike =
+    "w-full h-11 rounded-xl border border-input bg-background " +
+    "text-foreground px-3 flex items-center gap-2 " +
+    "focus:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:border-ring " +
+    "transition-all duration-300";
 
   return (
     <Popover>
@@ -14,17 +22,17 @@ export default function DatePicker({ value, onChange }) {
         <Button
           variant="outline"
           className={[
-            "justify-start w-[220px]",
-            // theme-aware surface & text
-            "bg-background text-foreground border-border",
-            // hover/focus/open states
+            inputLike,
+            // subtle hover to match inputs
             "hover:bg-muted",
-            "focus-visible:ring-2 focus-visible:ring-[var(--ring)]",
-            "data-[state=open]:ring-2 data-[state=open]:ring-[var(--ring)]",
+            // muted text when no date selected (acts like placeholder)
+            invalid ? "text-muted-foreground" : "text-foreground",
           ].join(" ")}
         >
-          <CalendarIcon className="mr-2 h-4 w-4" />
-          {isNaN(date) ? "Pick a date" : format(date, "yyyy-MM-dd")}
+          <CalendarIcon className="h-4 w-4" />
+          <span className="truncate">
+            {invalid ? placeholder : format(date, "yyyy-MM-dd")}
+          </span>
         </Button>
       </PopoverTrigger>
 
@@ -32,13 +40,12 @@ export default function DatePicker({ value, onChange }) {
         align="start"
         className={[
           "w-auto p-0 rounded-xl",
-          // dropdown surface w/ tokens
           "bg-popover text-popover-foreground border border-border shadow-md",
         ].join(" ")}
       >
         <Calendar
           mode="single"
-          selected={isNaN(date) ? undefined : date}
+          selected={invalid ? undefined : date}
           onSelect={(d) => d && onChange(format(d, "yyyy-MM-dd"))}
           initialFocus
           className="bg-transparent"

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
 import dayjs from "dayjs";
 import { Button } from "./components/ui/button";
@@ -36,6 +36,7 @@ export default function Stats() {
   const [data, setData] = useState(EMPTY);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
+  const [templates, setTemplates] = useState([]);
 
   useEffect(() => {
     let alive = true;
@@ -54,10 +55,15 @@ export default function Stats() {
         if (alive) setLoading(false);
       }
     })();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, [range]);
+
+  // Load templates once for gym/cali overview cards
+  useEffect(() => {
+    (async () => {
+      try { setTemplates(await api.listTemplates()); } catch {}
+    })();
+  }, []);
 
   const canNext = dayjs(range.to).isBefore(dayjs(), "day");
 
@@ -86,21 +92,27 @@ export default function Stats() {
       <div className="stack">
         <div className="card p-5 text-red-500">Failed to load stats.</div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={prev}>
-            Prev 4 weeks
-          </Button>
-          <Button variant="outline" onClick={goToday}>
-            Today
-          </Button>
-          <Button onClick={next} disabled={!canNext}>
-            Next 4 weeks
-          </Button>
+          <Button variant="outline" onClick={prev}>Prev 4 weeks</Button>
+          <Button variant="outline" onClick={goToday}>Today</Button>
+          <Button onClick={next} disabled={!canNext}>Next 4 weeks</Button>
         </div>
       </div>
     );
   }
 
   const maxTotals = Math.max(data?.totals?.done ?? 0, data?.totals?.target ?? 0, 1);
+
+  // Split templates into gym/calisthenics and group calisthenics by group
+  const gymTemplates = useMemo(() => templates.filter(t => t.kind === "gym"), [templates]);
+  const caliTemplates = useMemo(() => templates.filter(t => t.kind !== "gym"), [templates]);
+  const caliByGroup = useMemo(() => {
+    const m = {};
+    for (const t of caliTemplates) {
+      const g = (t.group || "Ungrouped").trim() || "Ungrouped";
+      (m[g] ||= []).push(t);
+    }
+    return m;
+  }, [caliTemplates]);
 
   return (
     <div className="stack">
@@ -146,12 +158,8 @@ export default function Stats() {
               return (
                 <div key={i} className="space-y-1">
                   <div className="flex items-center justify-between small text-muted-foreground">
-                    <span>
-                      {w?.from} → {w?.to}
-                    </span>
-                    <span>
-                      {done}/{target}
-                    </span>
+                    <span>{w?.from} → {w?.to}</span>
+                    <span>{done}/{target}</span>
                   </div>
                   <div className="h-2 rounded-full bg-[var(--secondary)] border border-border overflow-hidden">
                     <div className="h-full bg-blue-500" style={{ width: `${(done / max) * 100}%` }} />
@@ -166,16 +174,66 @@ export default function Stats() {
         )}
       </div>
 
+      {/* ---- New: Gym overview ---- */}
+      {gymTemplates.length > 0 && (
+        <div className="card p-6">
+          <div className="text-lg font-semibold mb-3">Gym Overview</div>
+          <div className="space-y-3">
+            {gymTemplates.map(t => (
+              <div key={t._id} className="flex items-center justify-between rounded-xl border border-border px-3 py-2 bg-background">
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium truncate">{t.name}</div>
+                  <div className="small text-muted-foreground">
+                    {t.dailyTarget} sets • {t.defaultSetSize} reps
+                    {t.weight != null ? ` • ${t.weight} kg` : ""}
+                    {" • Prog: "}{t.progression?.mode || "volume"}
+                  </div>
+                </div>
+                <div className="small text-muted-foreground whitespace-nowrap pl-3">
+                  Days: {t.schedule?.daysOfWeek?.length ?? 0}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ---- New: Calisthenics by group ---- */}
+      {caliTemplates.length > 0 && (
+        <div className="card p-6">
+          <div className="text-lg font-semibold mb-3">Calisthenics Overview</div>
+          <div className="space-y-4">
+            {Object.entries(caliByGroup).map(([groupName, items]) => (
+              <div key={groupName}>
+                <div className="inline-flex items-center rounded-lg bg-muted/60 px-3 py-1.5 text-sm font-semibold mb-2">
+                  {groupName}
+                </div>
+                <div className="space-y-2">
+                  {items.map(t => (
+                    <div key={t._id} className="flex items-center justify-between rounded-xl border border-border px-3 py-2 bg-background">
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium truncate">{t.name}</div>
+                        <div className="small text-muted-foreground">
+                          {t.dailyTarget}/{t.unit} • set {t.defaultSetSize}
+                          {" • Prog: "}{t.progression?.mode || "volume"}
+                        </div>
+                      </div>
+                      <div className="small text-muted-foreground whitespace-nowrap pl-3">
+                        Days: {t.schedule?.daysOfWeek?.length ?? 0}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="flex gap-2">
-        <Button variant="outline" onClick={prev}>
-          Prev 4 weeks
-        </Button>
-        <Button variant="outline" onClick={goToday}>
-          Today
-        </Button>
-        <Button onClick={next} disabled={!canNext}>
-          Next 4 weeks
-        </Button>
+        <Button variant="outline" onClick={prev}>Prev 4 weeks</Button>
+        <Button variant="outline" onClick={goToday}>Today</Button>
+        <Button onClick={next} disabled={!canNext}>Next 4 weeks</Button>
       </div>
     </div>
   );
