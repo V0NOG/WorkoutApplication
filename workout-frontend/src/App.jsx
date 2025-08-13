@@ -42,7 +42,7 @@ export default function App() {
       {user && (
         <header className="sticky top-0 z-10 flex items-center gap-4 py-4 backdrop-blur">
           <div className="text-xl font-extrabold">
-            Workout<span className="text-primary">Flow</span>
+            Rep<span className="text-primary">Flow</span>
           </div>
 
           <Tabs value={tab} onValueChange={setTab} className="ml-2">
@@ -141,7 +141,7 @@ function AuthCard({ onAuth }) {
       <div className="card w-full max-w-md p-6 md:p-8 space-y-5" onKeyDown={onKeyDown}>
         <div className="space-y-1">
           <div className="text-2xl font-extrabold tracking-tight">
-            Welcome to <span className="text-primary">WorkoutFlow</span>
+            Welcome to <span className="text-primary">RepFlow</span>
           </div>
           <p className="small">Simple daily workout tracking — targets, sets, and streaks.</p>
         </div>
