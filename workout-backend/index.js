@@ -38,10 +38,10 @@ await connectMongo();
 
 // --- Models ---
 const UserSchema = new mongoose.Schema({
-  firstName: { type: String, default: '' },   // NEW
-  lastName:  { type: String, default: '' },   // NEW
   email: { type: String, unique: true },
   passwordHash: String,
+  firstName: { type: String, default: '' },
+  lastName:  { type: String, default: '' },
   tz: { type: String, default: 'Australia/Sydney' },
   refreshHashes: [String],
   reset: {
@@ -313,59 +313,63 @@ async function moveOneDailyInstance(di, destDate, userId) {
 
 // --- Routes: Auth ---
 app.post('/auth/register', async (req, res) => {
-  const { firstName, lastName, email, password, tz } = req.body;
-  if (!firstName || !lastName || !email || !password) {
-    return res.status(400).json({ error: 'firstName, lastName, email & password required' });
-  }
+  const { email, password, tz, firstName = '', lastName = '' } = req.body;
+  if (!email || !password) return res.status(400).json({ error: 'Email & password required' });
 
   const exists = await User.findOne({ email });
   if (exists) return res.status(400).json({ error: 'Email already registered' });
 
   const passwordHash = await bcrypt.hash(password, 12);
   const user = await User.create({
-    firstName: String(firstName).trim(),
-    lastName: String(lastName).trim(),
-    email: String(email).trim(),
+    email,
     passwordHash,
-    tz: tz || 'UTC'
+    firstName: String(firstName || '').trim(),
+    lastName: String(lastName || '').trim(),
+    tz: tz || 'Australia/Sydney'
   });
 
   const access = signAccess(user._id.toString());
   const refresh = makeRefresh();
   const hash = sha256(refresh);
-
   await User.updateOne({ _id: user._id }, { $addToSet: { refreshHashes: hash } });
-
   setRefreshCookie(res, refresh);
-  res.json({
-    token: access,
-    user: { id: user._id, email: user.email, tz: user.tz, firstName: user.firstName, lastName: user.lastName }
-  });
+  res.json({ token: access, user: { id: user._id, email: user.email, tz: user.tz, firstName: user.firstName, lastName: user.lastName } });
 });
 
 app.post('/auth/login', async (req, res) => {
   const { email, password } = req.body;
   const user = await User.findOne({ email });
   if (!user) return res.status(400).json({ error: 'Invalid credentials' });
-
   const ok = await bcrypt.compare(password, user.passwordHash);
   if (!ok) return res.status(400).json({ error: 'Invalid credentials' });
 
   const access = signAccess(user._id.toString());
   const refresh = makeRefresh();
   const hash = sha256(refresh);
-
   await User.updateOne({ _id: user._id }, { $addToSet: { refreshHashes: hash } });
-
   setRefreshCookie(res, refresh);
-  res.json({
-    token: access,
-    user: { id: user._id, email: user.email, tz: user.tz, firstName: user.firstName, lastName: user.lastName }
-  });
+  res.json({ token: access, user: { id: user._id, email: user.email, tz: user.tz, firstName: user.firstName, lastName: user.lastName } });
 });
 
 app.get('/me', auth, async (req, res) => {
   const u = await User.findById(req.userId).lean();
+  res.json({ id: u._id, email: u.email, tz: u.tz, firstName: u.firstName || '', lastName: u.lastName || '' });
+});
+
+app.patch('/me', auth, async (req, res) => {
+  const { firstName, lastName, tz } = req.body || {};
+  const set = {};
+  if (typeof firstName === 'string') set.firstName = firstName.trim();
+  if (typeof lastName === 'string')  set.lastName  = lastName.trim();
+  if (typeof tz === 'string' && tz)  set.tz        = tz.trim();
+
+  const u = await User.findOneAndUpdate(
+    { _id: req.userId },
+    { $set: set },
+    { new: true }
+  ).lean();
+
+  if (!u) return res.status(404).json({ error: 'Not found' });
   res.json({ id: u._id, email: u.email, tz: u.tz, firstName: u.firstName || '', lastName: u.lastName || '' });
 });
 

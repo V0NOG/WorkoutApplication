@@ -45,6 +45,7 @@ const ts = () => `t=${Date.now()}`;
 export const api = {
   // CHANGED: register now accepts an object { firstName, lastName, email, password, tz }
   register: (payload) => req('/auth/register', { method: 'POST', body: JSON.stringify(payload) }),
+  updateMe: (patch) => req('/me', { method: 'PATCH', body: JSON.stringify(patch) }),
   login:    (email, password) => req('/auth/login',    { method: 'POST', body: JSON.stringify({ email, password }) }),
   me:       () => req('/me'),
   listTemplates: () => req(`/templates?${ts()}`),
