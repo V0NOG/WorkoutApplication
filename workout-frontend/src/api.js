@@ -60,4 +60,6 @@ export const api = {
   requestPasswordReset: (email) => req('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) }),
   resetPassword: (token, password) => req('/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, password }) }),
   weightsSeries: (from, to, templateId) => req(`/stats/weights?from=${from}&to=${to}${templateId ? `&templateId=${templateId}` : ''}`),
+  moveDaily: (dailyId, toDate) => req(`/daily/${dailyId}/move`, { method: 'POST', body: JSON.stringify({ toDate }) }),
+  moveDay: (fromDate, toDate) => req(`/daily/move-day`, { method: 'POST', body: JSON.stringify({ fromDate, toDate }) }),
 };

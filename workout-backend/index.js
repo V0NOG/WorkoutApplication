@@ -303,6 +303,73 @@ async function materializeForDate(userId, date) {
   }
 }
 
+async function moveOneDailyInstance(di, destDate, userId) {
+  const tpl = await TaskTemplate.findOne({ _id: di.templateId, userId });
+  if (!tpl) return { status: 'skipped', reason: 'template-missing', id: di._id.toString() };
+
+  const newTarget = computeTargetWithRules(tpl, destDate);
+  const newSetsPlanned = planSets(newTarget, tpl.defaultSetSize || newTarget);
+  const newGroup = tpl.group || '';
+
+  const existingDest = await DailyInstance.findOne({
+    userId,
+    templateId: di.templateId,
+    date: destDate
+  });
+
+  if (existingDest) {
+    const mergedSetsDone = [...(existingDest.setsDone || []), ...(di.setsDone || [])];
+    const mergedRepsDone = (existingDest.repsDone || 0) + (di.repsDone || 0);
+    const mergedNotes = [existingDest.notes, di.notes].filter(Boolean).join('\n');
+    const mergedRpe = di.rpe ?? existingDest.rpe ?? null;
+    const mergedWeight = di.weight ?? existingDest.weight ?? null;
+
+    await DailyInstance.updateOne(
+      { _id: existingDest._id },
+      {
+        $set: {
+          date: destDate,
+          target: newTarget,
+          setsPlanned: newSetsPlanned,
+          group: newGroup,
+          setsDone: mergedSetsDone,
+          repsDone: mergedRepsDone,
+          notes: mergedNotes,
+          rpe: mergedRpe,
+          weight: mergedWeight,
+          status: computeStatus(mergedRepsDone, newTarget),
+        }
+      }
+    );
+    await DailyInstance.deleteOne({ _id: di._id });
+    return { status: 'merged', from: di._id.toString(), into: existingDest._id.toString() };
+  }
+
+  // create destination, then delete source
+  await DailyInstance.updateOne(
+    { userId, templateId: di.templateId, date: destDate },
+    {
+      $setOnInsert: {
+        userId,
+        templateId: di.templateId,
+        date: destDate,
+        target: newTarget,
+        setsPlanned: newSetsPlanned,
+        setsDone: di.setsDone || [],
+        repsDone: di.repsDone || 0,
+        status: computeStatus(di.repsDone || 0, newTarget),
+        group: newGroup,
+        notes: di.notes || '',
+        rpe: di.rpe ?? null,
+        weight: di.weight ?? null,
+      }
+    },
+    { upsert: true }
+  );
+  await DailyInstance.deleteOne({ _id: di._id });
+  return { status: 'moved', to: destDate, id: di._id.toString() };
+}
+
 // --- Routes: Auth ---
 app.post('/auth/register', async (req, res) => {
   const { email, password, tz } = req.body;
@@ -675,6 +742,117 @@ app.patch('/daily/:id/meta', auth, async (req, res) => {
   );
   if (!di) return res.status(404).json({ error: 'Not found' });
   res.json(di);
+});
+
+// --- Routes: Daily move/reschedule ---
+app.post('/daily/:id/move', auth, async (req, res) => {
+  const { toDate } = req.body;
+  if (!toDate) return res.status(400).json({ error: 'toDate required (YYYY-MM-DD)' });
+
+  const destDate = dayjs(toDate).format('YYYY-MM-DD');
+
+  const di = await DailyInstance.findOne({ _id: req.params.id, userId: req.userId });
+  if (!di) return res.status(404).json({ error: 'Not found' });
+
+  const tpl = await TaskTemplate.findOne({ _id: di.templateId, userId: req.userId });
+  if (!tpl) return res.status(400).json({ error: 'Template missing' });
+
+  // Compute destination target/plan snapshot using your existing rules
+  const newTarget = computeTargetWithRules(tpl, destDate);
+  const newSetsPlanned = planSets(newTarget, tpl.defaultSetSize || newTarget);
+  const newGroup = tpl.group || '';
+
+  // If a destination row already exists for the same template/date, merge into it
+  const existingDest = await DailyInstance.findOne({
+    userId: req.userId,
+    templateId: di.templateId,
+    date: destDate
+  });
+
+  if (existingDest) {
+    // Merge progress (sum reps, concat sets), prefer most recent non-empty metadata
+    const mergedSetsDone = [...(existingDest.setsDone || []), ...(di.setsDone || [])];
+    const mergedRepsDone = (existingDest.repsDone || 0) + (di.repsDone || 0);
+    const mergedNotes = [existingDest.notes, di.notes].filter(Boolean).join('\n');
+    const mergedRpe = di.rpe ?? existingDest.rpe ?? null;
+    const mergedWeight = di.weight ?? existingDest.weight ?? null;
+
+    await DailyInstance.updateOne(
+      { _id: existingDest._id },
+      {
+        $set: {
+          date: destDate,
+          target: newTarget,
+          setsPlanned: newSetsPlanned,
+          group: newGroup,
+          setsDone: mergedSetsDone,
+          repsDone: mergedRepsDone,
+          notes: mergedNotes,
+          rpe: mergedRpe,
+          weight: mergedWeight,
+          status: computeStatus(mergedRepsDone, newTarget),
+        }
+      }
+    );
+
+    // Remove original
+    await DailyInstance.deleteOne({ _id: di._id });
+
+    return res.json({ ok: true, movedTo: destDate, mergedInto: existingDest._id.toString() });
+  }
+
+  // No destination row — create one and delete the source
+  await DailyInstance.updateOne(
+    { userId: req.userId, templateId: di.templateId, date: destDate },
+    {
+      $setOnInsert: {
+        userId: req.userId,
+        templateId: di.templateId,
+        date: destDate,
+        target: newTarget,
+        setsPlanned: newSetsPlanned,
+        setsDone: di.setsDone || [],
+        repsDone: di.repsDone || 0,
+        status: computeStatus(di.repsDone || 0, newTarget),
+        group: newGroup,
+        notes: di.notes || '',
+        rpe: di.rpe ?? null,
+        weight: di.weight ?? null,
+      }
+    },
+    { upsert: true }
+  );
+
+  await DailyInstance.deleteOne({ _id: di._id });
+
+  res.json({ ok: true, movedTo: destDate });
+});
+
+// --- Routes: Bulk move all items from a day ---
+app.post('/daily/move-day', auth, async (req, res) => {
+  const { fromDate, toDate } = req.body || {};
+  if (!fromDate || !toDate) return res.status(400).json({ error: 'fromDate and toDate required (YYYY-MM-DD)' });
+
+  const src = dayjs(fromDate).format('YYYY-MM-DD');
+  const dst = dayjs(toDate).format('YYYY-MM-DD');
+  if (src === dst) return res.status(400).json({ error: 'fromDate and toDate are the same' });
+
+  // fetch all instances on the source day
+  const items = await DailyInstance.find({ userId: req.userId, date: src }).lean();
+  if (!items.length) return res.json({ ok: true, moved: 0, merged: 0, skipped: 0, details: [] });
+
+  const details = [];
+  let moved = 0, merged = 0, skipped = 0;
+
+  for (const di of items) {
+    const result = await moveOneDailyInstance(di, dst, req.userId);
+    details.push(result);
+    if (result.status === 'moved') moved += 1;
+    else if (result.status === 'merged') merged += 1;
+    else skipped += 1;
+  }
+
+  res.json({ ok: true, from: src, to: dst, moved, merged, skipped, details });
 });
 
 app.listen(process.env.PORT, () => {

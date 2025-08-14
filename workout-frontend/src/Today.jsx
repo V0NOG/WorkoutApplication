@@ -25,6 +25,22 @@ function TaskCard({ item, onChanged }) {
   const [weight, setWeight] = useState(item.weight ?? item.meta?.weight ?? ""); // user actual
   const [showFeedback, setShowFeedback] = useState(false); // feedback toggle (default hidden)
 
+  // per-item move state
+  const [moving, setMoving] = useState(false);
+  const [moveDate, setMoveDate] = useState(dayjs().format("YYYY-MM-DD"));
+
+  async function moveToSelected() {
+    await api.moveDaily(item._id, moveDate);
+    setMoving(false);
+    await onChanged();
+  }
+  async function moveToToday() {
+    const todayStr = dayjs().format("YYYY-MM-DD");
+    await api.moveDaily(item._id, todayStr);
+    setMoving(false);
+    await onChanged();
+  }
+
   // NEW: custom reps input
   const [customReps, setCustomReps] = useState("");
   async function addCustom() {
@@ -127,6 +143,29 @@ function TaskCard({ item, onChanged }) {
           >
             {showFeedback ? "Hide feedback" : "Add feedback"}
           </Button>
+
+          {/* Move / Reschedule (per item) */}
+          <div className="flex flex-wrap items-center gap-2">
+            {dayjs(item.date).format("YYYY-MM-DD") !== dayjs().format("YYYY-MM-DD") && (
+              <Button variant="outline" size="sm" className="rounded-full" onClick={moveToToday}>
+                Do today
+              </Button>
+            )}
+            {!moving ? (
+              <Button variant="outline" size="sm" className="rounded-full" onClick={() => {
+                setMoveDate(dayjs(item.date).format("YYYY-MM-DD"));
+                setMoving(true);
+              }}>
+                Do on another day…
+              </Button>
+            ) : (
+              <div className="flex items-center gap-2">
+                <DatePicker value={moveDate} onChange={setMoveDate} />
+                <Button size="sm" onClick={moveToSelected}>Move</Button>
+                <Button size="sm" variant="outline" onClick={() => setMoving(false)}>Cancel</Button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -139,19 +178,19 @@ function TaskCard({ item, onChanged }) {
         <Button variant="outline" className="rounded-full px-3" onClick={()=>add(5)}>+5</Button>
         <Button variant="outline" className="rounded-full px-3" onClick={()=>add(1)}>+1</Button>
 
-        {/* NEW: custom reps input + Add (styled like +1) */}
+        {/* NEW: custom reps input + Add */}
         <div className="inline-flex items-center gap-2">
           <Input
             type="number"
             inputMode="numeric"
             pattern="[0-9]*"
             min={1}
-            placeholder="reps"
+            placeholder="+"
             value={customReps}
             onChange={(e) => setCustomReps(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") addCustom(); }}
             className={[
-              "h-9 w-24 rounded-full px-3 text-center",
+              "h-9 w-14 rounded-full px-3 text-center",
               "border border-input bg-background",
               "placeholder:text-muted-foreground",
               "focus:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:border-ring",
@@ -226,6 +265,11 @@ export default function Today() {
   const [statusByDate, setStatusByDate] = useState({});
   const [groupsByDate, setGroupsByDate] = useState({}); // groups for MonthCalendar
 
+  // ---- BULK MOVE state/handlers (belongs in Today, not TaskCard) ----
+  const [bulkMoveOpen, setBulkMoveOpen] = useState(false);
+  const [bulkToDate, setBulkToDate] = useState(dayjs().format("YYYY-MM-DD"));
+  const [bulkBusy, setBulkBusy] = useState(false);
+
   async function loadPlan(d = date) {
     setLoadingPlan(true);
     try {
@@ -283,6 +327,23 @@ export default function Today() {
     await Promise.all([loadPlan(d), loadMonthStatus(visibleMonth)]);
   }
 
+  // bulk move actions
+  async function bulkMove(to) {
+    setBulkBusy(true);
+    try {
+      await api.moveDay(date, to);
+      const dest = dayjs(to).format("YYYY-MM-DD");
+      setDate(dest);                 // jump to destination day
+      await refreshAll(dest);        // refresh plan + month grid
+    } finally {
+      setBulkBusy(false);
+      setBulkMoveOpen(false);
+    }
+  }
+  async function bulkMoveToToday() {
+    await bulkMove(dayjs().format("YYYY-MM-DD"));
+  }
+
   useEffect(() => { loadPlan(date); setVisibleMonth(dayjs(date)); }, [date]);
   useEffect(() => { loadMonthStatus(visibleMonth); }, [visibleMonth]);
 
@@ -320,6 +381,37 @@ export default function Today() {
         <DatePicker value={date} onChange={setDate} />
         <Button variant="outline" size="icon" onClick={nextDay}>→</Button>
         <Button variant="outline" onClick={today}>Today</Button>
+
+        {/* Bulk-move controls aligned to the right */}
+        <div className="ml-auto flex items-center gap-2">
+          {/* Quick move whole day to today (hide if already today) */}
+          {dayjs(date).format("YYYY-MM-DD") !== dayjs().format("YYYY-MM-DD") && (
+            <Button variant="outline" onClick={bulkMoveToToday} disabled={bulkBusy}>
+              Move all to today
+            </Button>
+          )}
+
+          {/* Toggle inline picker for custom destination */}
+          {!bulkMoveOpen ? (
+            <Button
+              variant="outline"
+              onClick={() => {
+                setBulkToDate(dayjs(date).format("YYYY-MM-DD"));
+                setBulkMoveOpen(true);
+              }}
+            >
+              Move all…
+            </Button>
+          ) : (
+            <div className="flex items-center gap-2">
+              <DatePicker value={bulkToDate} onChange={setBulkToDate} />
+              <Button onClick={() => bulkMove(bulkToDate)} disabled={bulkBusy}>Move</Button>
+              <Button variant="outline" onClick={() => setBulkMoveOpen(false)} disabled={bulkBusy}>
+                Cancel
+              </Button>
+            </div>
+          )}
+        </div>
       </div>
 
       {loadingPlan && !planLoadedOnce ? null : (
