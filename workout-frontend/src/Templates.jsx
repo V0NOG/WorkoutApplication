@@ -83,7 +83,6 @@ function todayLocalISO() {
   return local.toISOString().slice(0, 10); // YYYY-MM-DD in local time
 }
 
-
 export default function Templates() {
   const [list, setList] = useState([]);
 
@@ -112,6 +111,10 @@ export default function Templates() {
 
   const [editingId, setEditingId] = useState(null);
   const [draft, setDraft] = useState(null);
+
+  // Inline delete confirm state
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [deleting, setDeleting] = useState(false);
 
   function upd(k, v)  { setForm((p) => ({ ...p, [k]: v })); }
   function dset(k, v) { setDraft((p) => ({ ...p, [k]: v })); }
@@ -168,11 +171,20 @@ export default function Templates() {
     refresh();
   }
 
-  async function remove(id) {
-    if (!confirm("Delete template?")) return;
-    await api.deleteTemplate(id);
-    pingTemplatesChanged();
-    refresh();
+  // Themed inline delete confirmation (replaces native confirm)
+  function askDelete(id) {
+    setConfirmDeleteId(id);
+  }
+  async function doDelete(id) {
+    setDeleting(true);
+    try {
+      await api.deleteTemplate(id);
+      pingTemplatesChanged();
+      await refresh();
+    } finally {
+      setDeleting(false);
+      setConfirmDeleteId(null);
+    }
   }
 
   function startEdit(t) {
@@ -201,7 +213,7 @@ export default function Templates() {
       showDeload: hasDeload,
     });
   }
-  function cancelEdit() { setEditingId(null); setDraft(null); }
+  function cancelEdit() { setEditingId(null); setDraft(null); setConfirmDeleteId(null); }
 
   async function saveEdit() {
     if (!editingId || !draft) return;
@@ -484,9 +496,45 @@ export default function Templates() {
                               )}
                             </div>
                           </div>
-                          <div className="flex gap-2">
-                            <Button variant="outline" onClick={() => startEdit(t)}>Edit</Button>
-                            <Button variant="outline" onClick={() => remove(t._id)}>Delete</Button>
+
+                          {/* Actions / Inline delete confirmation */}
+                          <div className="flex items-center gap-2">
+                            {confirmDeleteId !== t._id ? (
+                              <>
+                                <Button variant="outline" onClick={() => startEdit(t)}>Edit</Button>
+                                <Button
+                                  variant="outline"
+                                  onClick={() => askDelete(t._id)}
+                                  aria-label={`Delete ${t.name}`}
+                                  className="border-red-300 text-red-600 hover:bg-red-50 dark:border-red-400/40 dark:text-red-400 dark:hover:bg-red-500/10"
+                                >
+                                  Delete
+                                </Button>
+                              </>
+                            ) : (
+                              <div className="flex items-center gap-2 rounded-xl border px-3 py-2 border-red-300 bg-red-50 dark:border-red-400/40 dark:bg-red-500/10">
+                                <span className="small text-red-700 dark:text-red-300">
+                                  Delete “{t.name}”?
+                                </span>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => doDelete(t._id)}
+                                  disabled={deleting}
+                                  className="border-red-300 text-red-700 hover:bg-red-100 dark:border-red-400/40 dark:text-red-200 dark:hover:bg-red-500/20"
+                                >
+                                  {deleting ? "Deleting…" : "Delete"}
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => setConfirmDeleteId(null)}
+                                  disabled={deleting}
+                                >
+                                  Cancel
+                                </Button>
+                              </div>
+                            )}
                           </div>
                         </div>
                       );

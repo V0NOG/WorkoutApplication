@@ -24,14 +24,13 @@ async function req(path, opts = {}, _retried = false) {
   const res = await fetch(`${API}${path}`, {
     ...opts,
     headers,
-    // only include cookies for /auth routes (for refresh)
     credentials: path.startsWith('/auth') ? 'include' : 'same-origin',
-    cache: 'no-store', // avoid caching reads in dev
+    cache: 'no-store',
   });
 
   if (res.status === 401 && !_retried) {
-    const ok = await refreshAccessToken();      // use httpOnly refresh cookie
-    if (ok) return req(path, opts, true);       // retry once
+    const ok = await refreshAccessToken();
+    if (ok) return req(path, opts, true);
   }
 
   if (!res.ok) {
@@ -44,7 +43,8 @@ async function req(path, opts = {}, _retried = false) {
 const ts = () => `t=${Date.now()}`;
 
 export const api = {
-  register: (email, password) => req('/auth/register', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  // CHANGED: register now accepts an object { firstName, lastName, email, password, tz }
+  register: (payload) => req('/auth/register', { method: 'POST', body: JSON.stringify(payload) }),
   login:    (email, password) => req('/auth/login',    { method: 'POST', body: JSON.stringify({ email, password }) }),
   me:       () => req('/me'),
   listTemplates: () => req(`/templates?${ts()}`),

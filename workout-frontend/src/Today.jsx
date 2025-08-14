@@ -18,14 +18,116 @@ function useDebouncedEffect(fn, deps, delay = 500) {
   }, [...deps, delay]);
 }
 
+// --- Birthday helpers ---
+function getBrowserTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
+function isMonthDayInTz(tz, mm = "08", dd = "16") {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date());
+    const month = parts.find(p => p.type === "month")?.value || "";
+    const day = parts.find(p => p.type === "day")?.value || "";
+    return month === mm && day === dd;
+  } catch {
+    // Fallback to browser local time if anything goes wrong
+    const now = new Date();
+    const m = String(now.getMonth() + 1).padStart(2, "0");
+    const d = String(now.getDate()).padStart(2, "0");
+    return m === mm && d === dd;
+  }
+}
+
+function bdayTestOverride() {
+  try {
+    const qs = new URLSearchParams(window.location.search);
+    if (qs.get('bday') === '1') return true;                  // ?bday=1
+    if (localStorage.getItem('bday-test') === '1') return true; // set once, persists
+    if (import.meta.env.VITE_BDAY_TEST === '1') return true;    // env toggle
+  } catch {}
+  return false;
+}
+
+function BirthdayOverlay({ message = "Happy Birthday", onClose }) {
+  const balloons = Array.from({ length: 20 }).map((_, i) => {
+    const left = Math.random() * 100;
+    const scale = 0.8 + Math.random() * 0.8;
+    const duration = 7 + Math.random() * 6;
+    const delay = Math.random() * 2.5;
+    const hue = Math.floor(Math.random() * 360);
+    return { i, left, scale, duration, delay, hue };
+  });
+
+  return (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <style>{`
+          @keyframes bday-float-up {
+            0% { transform: translateY(110vh) rotate(0deg); opacity: 0; }
+            5% { opacity: 1; }
+            100% { transform: translateY(-15vh) rotate(12deg); opacity: 0.95; }
+          }
+        `}</style>
+        {balloons.map(b => (
+          <div
+            key={b.i}
+            className="absolute"
+            style={{
+              left: `${b.left}%`,
+              bottom: "-12vh",
+              width: `${28 * b.scale}px`,
+              height: `${38 * b.scale}px`,
+              borderRadius: "50% 50% 45% 55% / 60% 60% 40% 40%",
+              background: `hsl(${b.hue} 85% 62% / 0.95)`,
+              boxShadow: "inset -5px -10px 0 rgba(0,0,0,0.06)",
+              animation: `bday-float-up ${b.duration}s linear ${b.delay}s infinite`,
+            }}
+          >
+            <div
+              style={{
+                position: "absolute",
+                left: "50%",
+                bottom: "-32px",
+                transform: "translateX(-50%)",
+                width: "2px",
+                height: `${30 * b.scale}px`,
+                background: "rgba(0,0,0,0.25)",
+              }}
+            />
+          </div>
+        ))}
+      </div>
+
+      <div className="relative z-10 mx-4 max-w-lg w-full rounded-2xl border border-border bg-background/95 shadow-xl p-8 text-center space-y-4">
+        <div className="text-4xl md:text-5xl font-extrabold leading-tight">🎈 {message} 🎉</div>
+        <div className="text-muted-foreground">
+          Wishing you an amazing day filled with PBs and good vibes!
+        </div>
+        <div className="pt-2">
+          <Button className="rounded-full px-6" onClick={onClose}>Thanks!</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TaskCard({ item, onChanged }) {
   const [saving, setSaving] = useState(false);
   const [notes, setNotes] = useState(item.notes || "");
   const [rpe, setRpe] = useState(item.rpe ?? "");
   const [weight, setWeight] = useState(item.weight ?? item.meta?.weight ?? ""); // user actual
-  const [showFeedback, setShowFeedback] = useState(false); // feedback toggle (default hidden)
+  const [showFeedback, setShowFeedback] = useState(false);
 
-  // per-item move state
+  // per-item move
   const [moving, setMoving] = useState(false);
   const [moveDate, setMoveDate] = useState(dayjs().format("YYYY-MM-DD"));
 
@@ -41,7 +143,7 @@ function TaskCard({ item, onChanged }) {
     await onChanged();
   }
 
-  // NEW: custom reps input
+  // custom reps
   const [customReps, setCustomReps] = useState("");
   async function addCustom() {
     const n = Number(customReps);
@@ -57,7 +159,7 @@ function TaskCard({ item, onChanged }) {
 
   const isGym = item?.templateId?.kind === "gym";
   const targetWeight = isGym ? (item?.templateId?.weight ?? null) : null;
-  const showTargetWeightText = isGym && Number(targetWeight) > 0; // show "of Xkg" only when > 0
+  const showTargetWeightText = isGym && Number(targetWeight) > 0;
 
   async function add(n) { await api.addReps(item._id, n); await onChanged(); }
   async function completeSet() {
@@ -69,16 +171,12 @@ function TaskCard({ item, onChanged }) {
   async function saveMeta() {
     try {
       setSaving(true);
-      await api.setMeta(item._id, {
-        notes,
-        rpe: rpe === "" ? null : Number(rpe),
-        // weight is autosaved separately
-      });
+      await api.setMeta(item._id, { notes, rpe: rpe === "" ? null : Number(rpe) });
       await onChanged();
     } finally { setSaving(false); }
   }
 
-  // --- Autosave ACTUAL weight (debounced) ---
+  // autosave actual weight
   useDebouncedEffect(() => {
     if (!isGym) return;
     (async () => {
@@ -98,7 +196,6 @@ function TaskCard({ item, onChanged }) {
           <div className="font-semibold flex flex-wrap items-center gap-2">
             <span className="truncate">{item?.templateId?.name || "Task"}</span>
 
-            {/* Show target + actual for Gym inline */}
             {isGym && (
               <>
                 {targetWeight != null && Number(targetWeight) > 0 && (
@@ -134,7 +231,8 @@ function TaskCard({ item, onChanged }) {
           <div className="small px-2 py-0.5 rounded-full border border-border capitalize">
             {item.status}
           </div>
-          {/* Toggle button to show/hide feedback inputs */}
+
+        {/* feedback toggle */}
           <Button
             variant="outline"
             size="sm"
@@ -144,7 +242,7 @@ function TaskCard({ item, onChanged }) {
             {showFeedback ? "Hide feedback" : "Add feedback"}
           </Button>
 
-          {/* Move / Reschedule (per item) */}
+          {/* per-item move */}
           <div className="flex flex-wrap items-center gap-2">
             {dayjs(item.date).format("YYYY-MM-DD") !== dayjs().format("YYYY-MM-DD") && (
               <Button variant="outline" size="sm" className="rounded-full" onClick={moveToToday}>
@@ -169,7 +267,7 @@ function TaskCard({ item, onChanged }) {
         </div>
       </div>
 
-      {/* Buttons + NEW custom reps */}
+      {/* reps buttons */}
       <div className="flex flex-wrap items-center gap-2">
         <Button className="rounded-full px-4" onClick={completeSet}>
           Complete set (+{firstSetSize})
@@ -178,7 +276,7 @@ function TaskCard({ item, onChanged }) {
         <Button variant="outline" className="rounded-full px-3" onClick={()=>add(5)}>+5</Button>
         <Button variant="outline" className="rounded-full px-3" onClick={()=>add(1)}>+1</Button>
 
-        {/* NEW: custom reps input + Add */}
+        {/* custom reps */}
         <div className="inline-flex items-center gap-2">
           <Input
             type="number"
@@ -210,7 +308,7 @@ function TaskCard({ item, onChanged }) {
         <Button variant="outline" className="rounded-full px-3" onClick={undo}>Undo</Button>
       </div>
 
-      {/* Notes / RPE / Save (toggled) */}
+      {/* notes / rpe */}
       {showFeedback && (
         <div className="grid grid-cols-1 md:grid-cols-[1fr_220px] gap-3 items-start">
           <Textarea
@@ -263,12 +361,16 @@ export default function Today() {
 
   const [visibleMonth, setVisibleMonth] = useState(dayjs());
   const [statusByDate, setStatusByDate] = useState({});
-  const [groupsByDate, setGroupsByDate] = useState({}); // groups for MonthCalendar
+  const [groupsByDate, setGroupsByDate] = useState({});
 
-  // ---- BULK MOVE state/handlers (belongs in Today, not TaskCard) ----
+  // Bulk move (whole-day)
   const [bulkMoveOpen, setBulkMoveOpen] = useState(false);
   const [bulkToDate, setBulkToDate] = useState(dayjs().format("YYYY-MM-DD"));
   const [bulkBusy, setBulkBusy] = useState(false);
+
+  // Birthday overlay
+  const [me, setMe] = useState(null);
+  const [showBday, setShowBday] = useState(false);
 
   async function loadPlan(d = date) {
     setLoadingPlan(true);
@@ -302,7 +404,6 @@ export default function Today() {
     }
     setStatusByDate(statusMap);
 
-    // Also compute groupsByDate for this visible month (client-side from templates)
     try {
       const tpls = await api.listTemplates();
       const gmap = {};
@@ -333,8 +434,8 @@ export default function Today() {
     try {
       await api.moveDay(date, to);
       const dest = dayjs(to).format("YYYY-MM-DD");
-      setDate(dest);                 // jump to destination day
-      await refreshAll(dest);        // refresh plan + month grid
+      setDate(dest);
+      await refreshAll(dest);
     } finally {
       setBulkBusy(false);
       setBulkMoveOpen(false);
@@ -346,6 +447,47 @@ export default function Today() {
 
   useEffect(() => { loadPlan(date); setVisibleMonth(dayjs(date)); }, [date]);
   useEffect(() => { loadMonthStatus(visibleMonth); }, [visibleMonth]);
+
+  // birthday check on mount (uses browser timezone)
+  useEffect(() => {
+    (async () => {
+      try {
+        const m = await api.me();
+        setMe(m);
+
+        // Who should see the birthday surprise?
+        const emails = (import.meta.env.VITE_BDAY_EMAILS || "")
+          .split(",")
+          .map(s => s.trim().toLowerCase())
+          .filter(Boolean);
+
+        const okEmail = emails.includes((m?.email || "").toLowerCase());
+
+        // Use the browser's timezone (e.g., Europe/London)
+        const tz = getBrowserTimeZone();
+
+        const isBirthday = bdayTestOverride() || isMonthDayInTz(tz, "08", "16");
+
+        // Show at most once per day per user (keyed by email + date in tz)
+        const todayInTz = new Intl.DateTimeFormat("en-CA", {
+          timeZone: tz,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        }).format(new Date()); // YYYY-MM-DD
+
+        const seenKey = `bday-shown:${(m?.email || "unknown").toLowerCase()}:${todayInTz}`;
+        const alreadyShown = localStorage.getItem(seenKey);
+
+        if (okEmail && isBirthday && !alreadyShown) {
+          setShowBday(true);
+          localStorage.setItem(seenKey, "1");
+        }
+      } catch {
+        // ignore
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     const handler = () => { (async () => { await Promise.all([loadPlan(date), loadMonthStatus(visibleMonth)]); })(); };
@@ -384,17 +526,14 @@ export default function Today() {
 
         {/* Bulk-move controls aligned to the right */}
         <div className="ml-auto flex items-center gap-2">
-          {/* Quick move whole day to today (hide if already today) */}
           {dayjs(date).format("YYYY-MM-DD") !== dayjs().format("YYYY-MM-DD") && (
             <Button variant="outline" onClick={bulkMoveToToday} disabled={bulkBusy}>
               Move all to today
             </Button>
           )}
-
-          {/* Toggle inline picker for custom destination */}
           {!bulkMoveOpen ? (
             <Button
-              variant="outline"
+              variant="ghost"
               onClick={() => {
                 setBulkToDate(dayjs(date).format("YYYY-MM-DD"));
                 setBulkMoveOpen(true);
@@ -448,6 +587,14 @@ export default function Today() {
             setDate(newSel.format("YYYY-MM-DD"));
           }}
           onSelect={(dateStr) => setDate(dateStr)}
+        />
+      )}
+
+      {/* Birthday overlay */}
+      {showBday && (
+        <BirthdayOverlay
+          message="Happy Birthday Jenn"
+          onClose={() => setShowBday(false)}
         />
       )}
     </div>
