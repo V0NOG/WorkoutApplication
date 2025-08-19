@@ -120,6 +120,106 @@ function BirthdayOverlay({ message = "Happy Birthday", onClose }) {
   );
 }
 
+function MetricsCard({ date }) {
+  const [loading, setLoading] = useState(true);
+  const [weightKg, setWeightKg] = useState("");
+  const [heightCm, setHeightCm] = useState("");
+
+  const [collapsed, setCollapsed] = useState(
+    () => localStorage.getItem("metricsCollapsed") === "true"
+  );
+
+  const handleToggle = (v) => {
+    const next = !v; // because checked means “shown”
+    setCollapsed(next);
+    localStorage.setItem("metricsCollapsed", next);
+  };
+
+  // load data...
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true);
+      try {
+        const m = await api.getMetrics(date);
+        if (!alive) return;
+        setWeightKg(m?.weightKg ?? "");
+        setHeightCm(m?.heightCm ?? "");
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [date]);
+
+  // debounced autosave
+  useDebouncedEffect(() => {
+    if (loading) return;
+    (async () => {
+      await api.setMetrics(date, {
+        weightKg: (weightKg === "" ? null : Number(weightKg)),
+        heightCm: (heightCm === "" ? null : Number(heightCm)),
+      });
+    })();
+  }, [weightKg, heightCm, date, loading], 600);
+
+  return (
+    <div className="card p-4 md:p-5 flex flex-col gap-3">
+      <div className="flex justify-between items-center">
+        <div className="font-semibold">Today’s Metrics</div>
+        <Segmented
+          value={collapsed ? "off" : "on"}
+          onChange={(v) => {
+            const next = v === "off"; // off => collapsed
+            setCollapsed(next);
+            localStorage.setItem("metricsCollapsed", String(next));
+          }}
+          options={[
+            { value: "off", label: "Hide" },
+            { value: "on",  label: "Show" },
+          ]}
+        />
+      </div>
+
+      {!collapsed && (
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="inline-flex items-center gap-2">
+            <span className="small text-muted-foreground w-16">Weight</span>
+            <input
+              type="number"
+              inputMode="decimal"
+              className="h-10 w-[110px] rounded-lg border border-input bg-background px-3 text-right outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:border-ring"
+              placeholder="kg"
+              value={weightKg}
+              onChange={(e)=>setWeightKg(e.target.value)}
+            />
+            <span className="opacity-75 small">kg</span>
+          </label>
+
+          <label className="inline-flex items-center gap-2">
+            <span className="small text-muted-foreground w-16">Height</span>
+            <input
+              type="number"
+              inputMode="decimal"
+              className="h-10 w-[110px] rounded-lg border border-input bg-background px-3 text-right outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:border-ring"
+              placeholder="cm"
+              value={heightCm}
+              onChange={(e)=>setHeightCm(e.target.value)}
+            />
+            <span className="opacity-75 small">cm</span>
+          </label>
+
+          {(weightKg !== "" || heightCm !== "") && (
+            <span className="small text-muted-foreground">
+              Autosaved
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TaskCard({ item, onChanged }) {
   const [saving, setSaving] = useState(false);
   const [notes, setNotes] = useState(item.notes || "");
@@ -399,6 +499,38 @@ function isActiveOnDate(tpl, dateStr) {
   return startOk && endOk && dowOk;
 }
 
+function Segmented({ value, onChange, options, className = "" }) {
+  return (
+    <div
+      className={[
+        "inline-flex h-10 items-center rounded-lg border border-input bg-muted px-1",
+        "max-w-full",
+        className
+      ].join(" ")}
+    >
+      {options.map(({ value: v, label }) => {
+        const active = value === v;
+        return (
+          <button
+            key={v}
+            type="button"
+            onClick={() => onChange(v)}
+            className={[
+              "px-3 py-1.5 rounded-md text-sm font-medium transition",
+              "whitespace-nowrap",
+              active
+                ? "bg-background text-foreground shadow-sm border border-input"
+                : "text-muted-foreground"
+            ].join(" ")}
+          >
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function Today() {
   const [items, setItems] = useState([]);
   const [date, setDate] = useState(dayjs().format("YYYY-MM-DD"));
@@ -605,6 +737,8 @@ export default function Today() {
           </div>
         ))
       )}
+
+      <MetricsCard date={date} />
 
       {planLoadedOnce && (
         <MonthCalendar
