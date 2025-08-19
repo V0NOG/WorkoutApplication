@@ -1,4 +1,8 @@
-const API = 'http://localhost:5050';
+// src/api.js
+const API =
+  import.meta.env.VITE_API_BASE
+  || (location.hostname.endsWith('octarep.com') ? 'https://api.octarep.com' : 'http://localhost:5050');
+
 
 let token = localStorage.getItem('token') || '';
 export function setToken(t) {
