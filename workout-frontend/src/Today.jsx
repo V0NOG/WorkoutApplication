@@ -232,15 +232,25 @@ function TaskCard({ item, onChanged }) {
   const [moveDate, setMoveDate] = useState(dayjs().format("YYYY-MM-DD"));
 
   async function moveToSelected() {
-    await api.moveDaily(item._id, moveDate);
+    const dest = dayjs(moveDate).format("YYYY-MM-DD");
+    await api.moveDaily(item._id, dest);
     setMoving(false);
-    await onChanged();
+    await onChanged?.({
+      from: dayjs(item.date).format("YYYY-MM-DD"),
+      to: dest,
+      jumpTo: false, // stay on current day after a custom move
+    });
   }
+
   async function moveToToday() {
     const todayStr = dayjs().format("YYYY-MM-DD");
     await api.moveDaily(item._id, todayStr);
     setMoving(false);
-    await onChanged();
+    await onChanged?.({
+      from: dayjs(item.date).format("YYYY-MM-DD"),
+      to: todayStr,
+      jumpTo: true, // after "Do today" we jump to today
+    });
   }
 
   // custom reps
@@ -551,6 +561,13 @@ export default function Today() {
   const [me, setMe] = useState(null);
   const [showBday, setShowBday] = useState(false);
 
+  // Called after a single item is moved.
+  const handleItemChanged = async ({ from, to, jumpTo } = {}) => {
+    await loadPlan(date);
+    await loadMonthStatus(visibleMonth);
+    if (jumpTo && to) setDate(to);
+  };
+
   async function loadPlan(d = date) {
     setLoadingPlan(true);
     try {
@@ -564,12 +581,13 @@ export default function Today() {
 
   async function loadMonthStatus(m = visibleMonth) {
     const from = m.startOf("month").format("YYYY-MM-DD");
-    const to = m.endOf("month").format("YYYY-MM-DD");
-    const s = await api.statsSummary(from, to);
+    const to   = m.endOf("month").format("YYYY-MM-DD");
+    const s    = await api.statsSummary(from, to);
 
+    // Heatmap color states
     const statusMap = {};
     for (const d of s?.days ?? []) {
-      const done = Number(d?.done ?? 0);
+      const done   = Number(d?.done ?? 0);
       const target = Number(d?.target ?? 0);
       let status = "none";
       if (target > 0) {
@@ -583,24 +601,14 @@ export default function Today() {
     }
     setStatusByDate(statusMap);
 
-    try {
-      const tpls = await api.listTemplates();
-      const gmap = {};
-      for (let d = m.startOf("month"); !d.isAfter(m.endOf("month"), "day"); d = d.add(1, "day")) {
-        const dateStr = d.format("YYYY-MM-DD");
-        const groups = [];
-        for (const t of tpls) {
-          if (isActiveOnDate(t, dateStr)) {
-            const g = (t.group || "Ungrouped").trim() || "Ungrouped";
-            if (!groups.includes(g)) groups.push(g);
-          }
-        }
-        if (groups.length) gmap[dateStr] = groups;
+    // Groups come straight from the API now (includes moved items)
+    const gmap = {};
+    for (const d of s?.days ?? []) {
+      if (Array.isArray(d.groups) && d.groups.length) {
+        gmap[d.date] = d.groups;
       }
-      setGroupsByDate(gmap);
-    } catch {
-      setGroupsByDate({});
     }
+    setGroupsByDate(gmap);
   }
 
   async function refreshAll(d = date) {
@@ -732,7 +740,7 @@ export default function Today() {
           <div key={groupName} className="space-y-3">
             <div className="px-1 text-sm font-semibold text-muted-foreground">{groupName}</div>
             {rows.map((it) => (
-              <TaskCard key={it._id} item={it} onChanged={() => refreshAll(date)} />
+              <TaskCard key={it._id} item={it} onChanged={handleItemChanged} />
             ))}
           </div>
         ))
