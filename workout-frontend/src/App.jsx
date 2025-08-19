@@ -250,7 +250,7 @@ export default function App() {
         {user && (
           <header className="sticky top-0 z-10 flex items-center gap-4 py-4 backdrop-blur">
             <div className="text-xl font-extrabold">
-              Rep<span className="text-primary">Flow</span>
+              Octa<span className="text-primary">Flow</span>
             </div>
 
             <Tabs value={tab} onValueChange={setTab} className="ml-2">
@@ -396,7 +396,7 @@ function AuthCard({ onAuth }) {
       <style>{`.auth-input:-webkit-autofill,.auth-input:-webkit-autofill:hover,.auth-input:-webkit-autofill:focus{-webkit-box-shadow:0 0 0px 1000px hsl(var(--background)) inset!important;box-shadow:0 0 0px 1000px hsl(var(--background)) inset!important;-webkit-text-fill-color:hsl(var(--foreground))!important;caret-color:hsl(var(--foreground))!important}`}</style>
       <div className="card w-full max-w-md p-6 md:p-8 space-y-5" onKeyDown={onKeyDown}>
         <div className="space-y-1">
-          <div className="text-2xl font-extrabold tracking-tight">Welcome to <span className="text-primary">RepFlow</span></div>
+          <div className="text-2xl font-extrabold tracking-tight">Welcome to <span className="text-primary">OctaFlow</span></div>
           <p className="small">Simple daily workout tracking — targets, sets, and streaks.</p>
         </div>
 
