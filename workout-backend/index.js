@@ -96,6 +96,17 @@ const DailyInstanceSchema = new mongoose.Schema({
 
 DailyInstanceSchema.index({ userId: 1, templateId: 1, date: 1 }, { unique: true });
 
+const DailyMetricSchema = new mongoose.Schema({
+  userId: { type: mongoose.Types.ObjectId, ref: 'User' },
+  date: { type: String },              // 'YYYY-MM-DD'
+  weightKg: { type: Number, default: null },
+  heightCm: { type: Number, default: null },
+}, { timestamps: true });
+
+DailyMetricSchema.index({ userId: 1, date: 1 }, { unique: true });
+
+const DailyMetric = mongoose.model('DailyMetric', DailyMetricSchema);
+
 const User = mongoose.model('User', UserSchema);
 const TaskTemplate = mongoose.model('TaskTemplate', TaskTemplateSchema);
 const DailyInstance = mongoose.model('DailyInstance', DailyInstanceSchema);
@@ -429,6 +440,30 @@ app.post('/auth/reset-password', async (req, res) => {
   const passwordHash = await bcrypt.hash(password, 12);
   await User.updateOne({ _id: user._id }, { $set: { passwordHash }, $unset: { reset: 1 } });
   res.json({ ok: true });
+});
+
+// --- Routes: Daily metrics (body weight / height) ---
+app.get('/metrics', auth, async (req, res) => {
+  const date = (req.query.date || dayjs().format('YYYY-MM-DD')).slice(0,10);
+  const doc = await DailyMetric.findOne({ userId: req.userId, date }).lean();
+  res.json(doc || { date, weightKg: null, heightCm: null });
+});
+
+app.patch('/metrics', auth, async (req, res) => {
+  const { date, weightKg, heightCm } = req.body || {};
+  if (!date) return res.status(400).json({ error: 'date required (YYYY-MM-DD)' });
+
+  const set = {};
+  if (typeof weightKg !== 'undefined') set.weightKg = (weightKg === null ? null : Number(weightKg));
+  if (typeof heightCm !== 'undefined') set.heightCm = (heightCm === null ? null : Number(heightCm));
+
+  const doc = await DailyMetric.findOneAndUpdate(
+    { userId: req.userId, date: date.slice(0,10) },
+    { $set: set, $setOnInsert: { userId: req.userId, date: date.slice(0,10) } },
+    { upsert: true, new: true }
+  ).lean();
+
+  res.json(doc);
 });
 
 // --- Routes: Templates ---

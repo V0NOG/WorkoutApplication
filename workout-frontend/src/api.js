@@ -67,4 +67,9 @@ export const api = {
   weightsSeries: (from, to, templateId) => req(`/stats/weights?from=${from}&to=${to}${templateId ? `&templateId=${templateId}` : ''}`),
   moveDaily: (dailyId, toDate) => req(`/daily/${dailyId}/move`, { method: 'POST', body: JSON.stringify({ toDate }) }),
   moveDay: (fromDate, toDate) => req(`/daily/move-day`, { method: 'POST', body: JSON.stringify({ fromDate, toDate }) }),
+  getMetrics: (date) => req(`/metrics?date=${date}`),
+  setMetrics: (date, patch) => req(`/metrics`, {
+    method: 'PATCH',
+    body: JSON.stringify({ date, ...patch }),
+  }),
 };
