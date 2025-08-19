@@ -17,7 +17,7 @@ const inputClass =
 
 function DayPills({ value, onToggle }) {
   return (
-    <div className="w-full flex flex-wrap items-center gap-2">
+    <div className="grid grid-cols-7 gap-2 w-full">
       {DOW.map((d, i) => {
         const on = value.includes(i);
         return (
@@ -26,7 +26,8 @@ function DayPills({ value, onToggle }) {
             type="button"
             onClick={() => onToggle(i)}
             className={[
-              "px-3 py-1 rounded-full appearance-none outline-none ring-0 shadow-none transition-colors",
+              "w-full px-2 py-1 rounded-full text-sm",
+              "transition-colors",
               on
                 ? "bg-blue-500 text-white border border-transparent"
                 : "bg-transparent border border-border hover:bg-white/5"
@@ -444,7 +445,7 @@ export default function Templates() {
           </div>
         </div>
 
-        <div className="pt-1">
+        <div className="pt-1 sticky bottom-[calc(env(safe-area-inset-bottom)+8px)]">
           <Button className="w-full h-11" onClick={create}>Create template</Button>
         </div>
       </div>

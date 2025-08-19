@@ -700,22 +700,39 @@ export default function Today() {
 
   return (
     <div className="stack">
-      <div className="card p-3 md:p-4 flex items-center gap-2">
-        <Button variant="outline" size="icon" onClick={prevDay}>←</Button>
-        <DatePicker value={date} onChange={setDate} />
-        <Button variant="outline" size="icon" onClick={nextDay}>→</Button>
-        <Button variant="outline" onClick={today}>Today</Button>
+      <div className="card p-3 md:p-4 flex items-center gap-1.5">
+        {/* Date navigation */}
+        <div
+          className={[
+            "flex items-center gap-1.5",
+            // hide ONLY on small screens while bulk panel is open
+            bulkMoveOpen ? "hidden sm:flex" : ""
+          ].join(" ")}
+        >
+          <Button variant="outline" size="icon" onClick={prevDay} aria-label="Previous day">←</Button>
+          <DatePicker value={date} onChange={setDate} />
+          <Button variant="outline" size="icon" onClick={nextDay} aria-label="Next day">→</Button>
+          <Button variant="outline" onClick={today} className="hidden sm:inline-flex">Today</Button>
+        </div>
 
-        {/* Bulk-move controls aligned to the right */}
-        <div className="ml-auto flex items-center gap-2">
+        {/* Bulk-move controls */}
+        <div
+          className={[
+            "flex items-center gap-1.5",
+            // default pushes right; on mobile while open, take the left slot
+            bulkMoveOpen ? "ml-0 w-full justify-start sm:ml-auto sm:w-auto" : "ml-auto"
+          ].join(" ")}
+        >
           {dayjs(date).format("YYYY-MM-DD") !== dayjs().format("YYYY-MM-DD") && (
             <Button variant="outline" onClick={bulkMoveToToday} disabled={bulkBusy}>
-              Move all to today
+              <span className="sm:hidden">Move to today</span>
+              <span className="hidden sm:inline">Move all to today</span>
             </Button>
           )}
+
           {!bulkMoveOpen ? (
             <Button
-              variant="ghost"
+              variant="outline"
               onClick={() => {
                 setBulkToDate(dayjs(date).format("YYYY-MM-DD"));
                 setBulkMoveOpen(true);
@@ -724,7 +741,7 @@ export default function Today() {
               Move all…
             </Button>
           ) : (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
               <DatePicker value={bulkToDate} onChange={setBulkToDate} />
               <Button onClick={() => bulkMove(bulkToDate)} disabled={bulkBusy}>Move</Button>
               <Button variant="outline" onClick={() => setBulkMoveOpen(false)} disabled={bulkBusy}>

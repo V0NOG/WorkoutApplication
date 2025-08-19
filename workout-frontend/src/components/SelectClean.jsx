@@ -8,12 +8,15 @@ export default function SelectClean({ value, onChange, children, className = "",
         value={value}
         onChange={onChange}
         {...rest}
-        className="appearance-none [-webkit-appearance:none] [-moz-appearance:none]
-                   w-full h-[42px] pl-3 pr-9 rounded-xl
-                   bg-background text-foreground
-                   border border-input
-                   focus:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:border-ring
-                   placeholder:text-muted-foreground"
+        className="
+          appearance-none [-webkit-appearance:none] [-moz-appearance:none]
+          w-full h-11 pl-3 pr-9 rounded-xl
+          bg-background text-foreground
+          border border-input
+          focus:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:border-ring
+          placeholder:text-muted-foreground
+          text-base
+        "
       >
         {children}
       </select>

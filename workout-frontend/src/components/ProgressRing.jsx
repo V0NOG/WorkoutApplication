@@ -5,11 +5,17 @@ import React from "react";
  * size: pixels, stroke: thickness
  * value: 0..1
  */
-export default function ProgressRing({ size=64, stroke=8, value=0, label }) {
+export default function ProgressRing({ size = 64, stroke = 8, value = 0, label }) {
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
   const clamped = Math.max(0, Math.min(1, value));
   const dash = c * (1 - clamped);
+
+  // Responsive label sizes based on ring size
+  const pctFont = Math.max(10, Math.round(size * 0.22));      // ~22% of size
+  const labelFont = Math.max(9, Math.round(size * 0.14));     // ~14% of size
+
+  const id = React.useId();
 
   return (
     <svg
@@ -17,7 +23,11 @@ export default function ProgressRing({ size=64, stroke=8, value=0, label }) {
       height={size}
       viewBox={`0 0 ${size} ${size}`}
       className="overflow-visible text-foreground"
+      role="img"
+      aria-labelledby={`${id}-title`}
     >
+      <title id={`${id}-title`}>{Math.round(clamped * 100)}%{label ? ` – ${label}` : ""}</title>
+
       {/* track */}
       <circle
         cx={size/2}
@@ -29,7 +39,7 @@ export default function ProgressRing({ size=64, stroke=8, value=0, label }) {
       />
       {/* progress */}
       <defs>
-        <linearGradient id="ring-grad" x1="0" y1="0" x2="1" y2="1">
+        <linearGradient id={`${id}-grad`} x1="0" y1="0" x2="1" y2="1">
           <stop offset="0%" style={{ stopColor: "var(--primary)" }} />
           <stop offset="100%" style={{ stopColor: "color-mix(in oklab, var(--primary) 70%, white 30%)" }} />
         </linearGradient>
@@ -38,7 +48,7 @@ export default function ProgressRing({ size=64, stroke=8, value=0, label }) {
         cx={size/2}
         cy={size/2}
         r={r}
-        stroke="url(#ring-grad)"
+        stroke={`url(#${id}-grad)`}
         strokeWidth={stroke}
         fill="none"
         strokeDasharray={c}
@@ -54,17 +64,20 @@ export default function ProgressRing({ size=64, stroke=8, value=0, label }) {
         dominantBaseline="central"
         textAnchor="middle"
         fill="currentColor"
-        className="text-sm font-semibold select-none opacity-90"
+        style={{ fontSize: pctFont, fontWeight: 600 }}
+        className="select-none opacity-90"
       >
         {Math.round(clamped*100)}%
       </text>
+
       {label ? (
         <text
           x="50%"
-          y={size - 6}
+          y={size - Math.max(6, stroke / 2)}
           textAnchor="middle"
           fill="currentColor"
-          className="text-[10px] select-none opacity-60"
+          style={{ fontSize: labelFont }}
+          className="select-none opacity-60"
         >
           {label}
         </text>
