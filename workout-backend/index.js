@@ -211,7 +211,7 @@ async function materializeForDate(userId, date) {
   const toRemoveIds = [];
   for (const di of existing) {
     const tpl = tplById.get(di.templateId.toString());
-    if (!tpl || !isActiveOnDate(tpl, date)) toRemoveIds.push(di._id);
+    if (!tpl) toRemoveIds.push(di._id);
   }
   if (toRemoveIds.length) await DailyInstance.deleteMany({ _id: { $in: toRemoveIds } });
 
@@ -230,8 +230,18 @@ async function materializeForDate(userId, date) {
     const tpl = tplById.get(di.templateId.toString());
     if (!tpl) continue;
 
-    const newTarget = computeTargetWithRules(tpl, date);
-    const newSets = planSets(newTarget, tpl.defaultSetSize || newTarget);
+    const base = computeTargetWithRules(tpl, date);
+    let newTarget, newSets;
+    if (tpl.kind === 'gym') {
+      const repsPerSet = Math.max(1, Number(tpl.defaultSetSize) || 1);
+      const setsCount  = Math.max(1, Math.round(base));       // base = #sets (after prog/deload)
+      newTarget = setsCount * repsPerSet;                      // target in REPS for Gym
+      newSets   = Array.from({ length: setsCount }, () => repsPerSet); // exact #sets × reps
+    } else {
+      newTarget = Math.max(1, Math.round(base));               // calisthenics/etc: base is reps/mins/etc
+      const setSize = Math.max(1, Number(tpl.defaultSetSize) || newTarget);
+      newSets   = planSets(newTarget, setSize);
+    }
     const newGroup = tpl.group || '';
 
     const needsUpdate =
@@ -251,8 +261,19 @@ async function materializeForDate(userId, date) {
   for (const tpl of templates) {
     if (!isActiveOnDate(tpl, date)) continue;
 
-    const newTarget = computeTargetWithRules(tpl, date);
-    const newSets = planSets(newTarget, tpl.defaultSetSize || newTarget);
+    const base = computeTargetWithRules(tpl, date);
+    let newTarget, newSets;
+    if (tpl.kind === 'gym') {
+      const repsPerSet = Math.max(1, Number(tpl.defaultSetSize) || 1);
+      const setsCount  = Math.max(1, Math.round(base));       // base = #sets (after prog/deload)
+      newTarget = setsCount * repsPerSet;                      // target in REPS for Gym
+      newSets   = Array.from({ length: setsCount }, () => repsPerSet); // exact #sets × reps
+    } else {
+      newTarget = Math.max(1, Math.round(base));               // calisthenics/etc: base is reps/mins/etc
+      const setSize = Math.max(1, Number(tpl.defaultSetSize) || newTarget);
+      newSets   = planSets(newTarget, setSize);
+    }
+    const newGroup = tpl.group || '';
 
     ops.push({
       updateOne: {
@@ -278,8 +299,18 @@ async function moveOneDailyInstance(di, destDate, userId) {
   const tpl = await TaskTemplate.findOne({ _id: di.templateId, userId });
   if (!tpl) return { status: 'skipped', reason: 'template-missing', id: di._id.toString() };
 
-  const newTarget = computeTargetWithRules(tpl, destDate);
-  const newSetsPlanned = planSets(newTarget, tpl.defaultSetSize || newTarget);
+  const base = computeTargetWithRules(tpl, destDate);
+  let newTarget, newSetsPlanned;
+  if (tpl.kind === 'gym') {
+    const repsPerSet = Math.max(1, Number(tpl.defaultSetSize) || 1);
+    const setsCount  = Math.max(1, Math.round(base));
+    newTarget        = setsCount * repsPerSet;                      // reps target
+    newSetsPlanned   = Array.from({ length: setsCount }, () => repsPerSet);
+  } else {
+    newTarget        = Math.max(1, Math.round(base));
+    const setSize    = Math.max(1, Number(tpl.defaultSetSize) || newTarget);
+    newSetsPlanned   = planSets(newTarget, setSize);
+  }
   const newGroup = tpl.group || '';
 
   const existingDest = await DailyInstance.findOne({ userId, templateId: di.templateId, date: destDate });
@@ -619,16 +650,24 @@ app.get('/stats/summary', auth, async (req, res) => {
   for (let d = from.startOf('day'); !d.isAfter(to, 'day'); d = d.add(1,'day')) {
     const key = d.format('YYYY-MM-DD');
     const arr = byDate.get(key) || [];
+
     const targetSum = arr.reduce((s,x)=>s+(x.target||0), 0);
-    const repsSum = arr.reduce((s,x)=>s+(x.repsDone||0), 0);
+    const repsSum   = arr.reduce((s,x)=>s+(x.repsDone||0), 0);
     const scheduled = arr.length > 0;
-    const met = scheduled ? repsSum >= targetSum && targetSum > 0 : false;
+    const met       = scheduled ? repsSum >= targetSum && targetSum > 0 : false;
+
+    // DISTINCT groups for that date, using snapshot on DailyInstance
+    const groupsSet = new Set(
+      arr.map(x => (x.group || '').trim() || 'Ungrouped')
+    );
+    const groups = Array.from(groupsSet);
 
     if (scheduled) {
       if (met) { currentStreak += 1; longestStreak = Math.max(longestStreak, currentStreak); }
       else { currentStreak = 0; }
     }
-    days.push({ date: key, target: targetSum, done: repsSum, scheduled, met });
+
+    days.push({ date: key, target: targetSum, done: repsSum, scheduled, met, groups });
   }
 
   const weeks = [];
@@ -707,60 +746,15 @@ app.patch('/daily/:id/meta', auth, async (req, res) => {
 app.post('/daily/:id/move', auth, async (req, res) => {
   const { toDate } = req.body;
   if (!toDate) return res.status(400).json({ error: 'toDate required (YYYY-MM-DD)' });
-
   const destDate = dayjs(toDate).format('YYYY-MM-DD');
 
   const di = await DailyInstance.findOne({ _id: req.params.id, userId: req.userId });
   if (!di) return res.status(404).json({ error: 'Not found' });
 
-  const tpl = await TaskTemplate.findOne({ _id: di.templateId, userId: req.userId });
-  if (!tpl) return res.status(400).json({ error: 'Template missing' });
-
-  const newTarget = computeTargetWithRules(tpl, destDate);
-  const newSetsPlanned = planSets(newTarget, tpl.defaultSetSize || newTarget);
-  const newGroup = tpl.group || '';
-
-  const existingDest = await DailyInstance.findOne({ userId: req.userId, templateId: di.templateId, date: destDate });
-
-  if (existingDest) {
-    const mergedSetsDone = [...(existingDest.setsDone || []), ...(di.setsDone || [])];
-    const mergedRepsDone = (existingDest.repsDone || 0) + (di.repsDone || 0);
-    const mergedNotes = [existingDest.notes, di.notes].filter(Boolean).join('\n');
-    const mergedRpe = di.rpe ?? existingDest.rpe ?? null;
-    const mergedWeight = di.weight ?? existingDest.weight ?? null;
-
-    await DailyInstance.updateOne(
-      { _id: existingDest._id },
-      {
-        $set: {
-          date: destDate, target: newTarget, setsPlanned: newSetsPlanned, group: newGroup,
-          setsDone: mergedSetsDone, repsDone: mergedRepsDone, notes: mergedNotes,
-          rpe: mergedRpe, weight: mergedWeight, status: computeStatus(mergedRepsDone, newTarget)
-        }
-      }
-    );
-    await DailyInstance.deleteOne({ _id: di._id });
-
-    return res.json({ ok: true, movedTo: destDate, mergedInto: existingDest._id.toString() });
-  }
-
-  await DailyInstance.updateOne(
-    { userId: req.userId, templateId: di.templateId, date: destDate },
-    {
-      $setOnInsert: {
-        userId: req.userId, templateId: di.templateId, date: destDate,
-        target: newTarget, setsPlanned: newSetsPlanned,
-        setsDone: di.setsDone || [], repsDone: di.repsDone || 0,
-        status: computeStatus(di.repsDone || 0, newTarget),
-        group: newGroup, notes: di.notes || '', rpe: di.rpe ?? null, weight: di.weight ?? null
-      }
-    },
-    { upsert: true }
-  );
-
-  await DailyInstance.deleteOne({ _id: di._id });
-  res.json({ ok: true, movedTo: destDate });
+  const result = await moveOneDailyInstance(di, destDate, req.userId);
+  res.json({ ok: true, ...result });
 });
+
 
 // --- Routes: Bulk move all items from a day ---
 app.post('/daily/move-day', auth, async (req, res) => {
