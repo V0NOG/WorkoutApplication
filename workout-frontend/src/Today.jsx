@@ -152,20 +152,59 @@ function TaskCard({ item, onChanged }) {
     setCustomReps("");
   }
 
-  const unit = item?.templateId?.unit || "reps";
-  const target = Number(item.target || 0);
+  // ---------- GYM TOTALS (sets × reps) ----------
+  const isGym = item?.templateId?.kind === "gym";
+
+  // Force unit to "reps" for gym so text reads "... reps"
+  const unit = isGym ? "reps" : (item?.templateId?.unit || "reps");
+
+  const repsPerSet   = Number(item?.templateId?.defaultSetSize ?? 0); // e.g. 20
+  // planned array from backend
+  const plannedRaw   = Array.isArray(item?.setsPlanned) ? item.setsPlanned : [];
+  const planned      = plannedRaw.map(n => Number(n));
+
+  // If dailyTarget is missing but setsPlanned is a single count like [5], use that.
+  const setsCountFromPlanned =
+    planned.length === 1 && Number.isFinite(planned[0]) ? Number(planned[0]) : 0;
+
+  const setsFromTpl  = (Number(item?.templateId?.dailyTarget ?? 0) || setsCountFromPlanned);
+
+  // Heuristic: does setsPlanned look like per-set rep sizes (20,20,...) vs a single count ([5])?
+  const looksLikeSizes =
+    planned.length > 0 &&
+    !(planned.length === 1 && planned[0] === setsFromTpl) &&
+    planned.some(n => Number.isFinite(n) && n > 1);
+
+  const sumPlanned = looksLikeSizes
+    ? planned.reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0)
+    : 0;
+
+  // Prefer sizes sum; otherwise compute sets × reps
+  const computedTargetReps = looksLikeSizes
+    ? sumPlanned
+    : (setsFromTpl > 0 && repsPerSet > 0 ? setsFromTpl * repsPerSet : 0);
+
+  const backendTarget = Number(item?.target || 0); // often "sets" for gym
   const done = Number(item.repsDone || 0);
+
+  // Final target: for gym use computed reps if available, else fallback to backend.
+  const target = isGym
+    ? (computedTargetReps > 0 ? computedTargetReps : backendTarget)
+    : backendTarget;
+
   const pct = Math.min(1, done / Math.max(1, target));
 
-  const isGym = item?.templateId?.kind === "gym";
   const targetWeight = isGym ? (item?.templateId?.weight ?? null) : null;
   const showTargetWeightText = isGym && Number(targetWeight) > 0;
 
   async function add(n) { await api.addReps(item._id, n); await onChanged(); }
   async function completeSet() {
     const nextIndex = (item.setsDone?.length ?? 0);
-    const size = item.setsPlanned?.[nextIndex] ?? item.templateId?.defaultSetSize ?? 10;
-    await api.completeSet(item._id, size); await onChanged();
+    const size = looksLikeSizes
+      ? ((planned[nextIndex] ?? repsPerSet) || 10)  // parens fix precedence
+      : (repsPerSet || 10);
+    await api.completeSet(item._id, size);
+    await onChanged();
   }
   async function undo() { await api.undoLast(item._id); await onChanged(); }
   async function saveMeta() {
@@ -185,7 +224,15 @@ function TaskCard({ item, onChanged }) {
     })();
   }, [weight], 600);
 
-  const firstSetSize = item.setsPlanned?.[0] ?? item.templateId?.defaultSetSize ?? 10;
+  const nextIndex = (item.setsDone?.length ?? 0);
+  const nextSetSize = looksLikeSizes
+    ? ((planned[nextIndex] ?? repsPerSet) || 10)  // parens fix precedence
+    : (repsPerSet || 10);
+
+  // "Planned sets" display: list sizes when we have sizes, or just the count otherwise
+  const plannedText = looksLikeSizes
+    ? planned.join(" / ")
+    : (setsFromTpl > 0 ? String(setsFromTpl) : (planned.length ? String(planned[0]) : "—"));
 
   return (
     <div className="card p-5 md:p-6 space-y-4">
@@ -198,7 +245,7 @@ function TaskCard({ item, onChanged }) {
 
             {isGym && (
               <>
-                {targetWeight != null && Number(targetWeight) > 0 && (
+                {showTargetWeightText && (
                   <span className="small px-2 py-0.5 rounded-full border border-border">
                     Target: {targetWeight} kg
                   </span>
@@ -232,7 +279,7 @@ function TaskCard({ item, onChanged }) {
             {item.status}
           </div>
 
-        {/* feedback toggle */}
+          {/* feedback toggle */}
           <Button
             variant="outline"
             size="sm"
@@ -270,7 +317,7 @@ function TaskCard({ item, onChanged }) {
       {/* reps buttons */}
       <div className="flex flex-wrap items-center gap-2">
         <Button className="rounded-full px-4" onClick={completeSet}>
-          Complete set (+{firstSetSize})
+          Complete set (+{nextSetSize})
         </Button>
         <Button variant="outline" className="rounded-full px-3" onClick={()=>add(10)}>+10</Button>
         <Button variant="outline" className="rounded-full px-3" onClick={()=>add(5)}>+5</Button>
@@ -336,7 +383,7 @@ function TaskCard({ item, onChanged }) {
       )}
 
       <div className="small text-muted-foreground">
-        Planned sets: {item.setsPlanned?.join(" / ") || "—"}
+        Planned sets: {plannedText}
       </div>
     </div>
   );
