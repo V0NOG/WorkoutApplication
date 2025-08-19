@@ -471,6 +471,10 @@ export default function Templates() {
                       const gym = t.kind === "gym";
                       const hasProg = (t.progression?.weeklyPct ?? 0) > 0 || (t.progression?.cap ?? null) != null;
                       const hasDeload = (t.deloadRule?.everyNWeeks ?? 0) > 0;
+                      const totalReps = gym
+                        ? Number(t.dailyTarget || 0) * Number(t.defaultSetSize || 0)
+                        : null;
+
                       return (
                         <div key={t._id} className="p-4 md:p-5 flex items-start gap-3">
                           <div className="flex-1 space-y-1">
@@ -480,6 +484,7 @@ export default function Templates() {
                                 <>
                                   <span className="uppercase">GYM</span>{" • "}
                                   {t.dailyTarget} sets • {t.defaultSetSize} reps
+                                  {totalReps > 0 ? <> {" "}→ <strong>{totalReps} total</strong></> : null}
                                   {t.weight != null ? ` • ${t.weight} kg` : ""}
                                   {" • Days: "}{t.schedule?.daysOfWeek?.map((i)=>DOW[i]).join(", ")}
                                   {" • Prog: "}{hasProg ? (t.progression?.mode || "volume") : "off"}
