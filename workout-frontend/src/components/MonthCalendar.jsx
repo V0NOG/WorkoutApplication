@@ -3,28 +3,16 @@ import dayjs from "dayjs";
 
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-/**
- * Props:
- *  - month: dayjs()
- *  - statusByDate: { "YYYY-MM-DD": "done" | "partial" | "missed" | "none" }
- *  - groupsByDate?: { "YYYY-MM-DD": string[] }   // NEW (optional)
- *  - selectedDate: "YYYY-MM-DD"
- *  - onPrev, onNext, onSelect(dateStr)
- */
-
-// Deterministic hue from a string
 function hueFromString(s = "") {
   let h = 0;
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
   return h;
 }
-
 function GroupPill({ name }) {
   const hue = hueFromString(name);
   const dot = `hsl(${hue} 80% 50%)`;
-  // neutral surface + colored dot keeps it readable in both themes
   return (
-    <div className="flex items-center gap-2 rounded-md border border-border bg-background/70 px-2 py-0.5 text-xs leading-5">
+    <div className="flex items-center gap-2 rounded-md border border-border bg-background/70 px-2 py-0.5 text-[11px] leading-5 sm:text-xs">
       <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: dot }} />
       <span className="truncate">{name}</span>
     </div>
@@ -34,7 +22,7 @@ function GroupPill({ name }) {
 export default function MonthCalendar({
   month,
   statusByDate = {},
-  groupsByDate = {}, // NEW
+  groupsByDate = {},
   selectedDate,
   onPrev,
   onNext,
@@ -43,10 +31,9 @@ export default function MonthCalendar({
   const startOfMonth = month.startOf("month");
   const endOfMonth = month.endOf("month");
   const daysInMonth = endOfMonth.date();
-  const firstWeekday = startOfMonth.day(); // 0=Sun..6=Sat
-  const totalCells = 42; // 6 rows x 7 cols
+  const firstWeekday = startOfMonth.day();
+  const totalCells = 42;
 
-  // Build the 6x7 grid
   const cells = [];
   const prevMonth = startOfMonth.subtract(1, "month");
   const prevMonthDays = prevMonth.daysInMonth();
@@ -70,27 +57,26 @@ export default function MonthCalendar({
     if (status === "done") return "bg-emerald-600/30 border-emerald-600/50";
     if (status === "partial") return "bg-amber-500/30 border-amber-500/50";
     if (status === "missed") return "bg-rose-600/30 border-rose-600/50";
-    // "no data" -> theme aware
     return "bg-secondary border-border";
   }
 
   return (
-    <div className="card p-4 md:p-6">
+    <div className="card p-3 sm:p-4 md:p-6">
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="text-lg md:text-xl font-semibold">{startOfMonth.format("MMMM YYYY")}</div>
+      <div className="flex items-center justify-between mb-3 sm:mb-4">
+        <div className="text-base sm:text-lg md:text-xl font-semibold">{startOfMonth.format("MMMM YYYY")}</div>
         <div className="flex gap-2">
           <button
             type="button"
             onClick={onPrev}
-            className="px-3 py-1 rounded-lg border border-border hover:bg-muted outline-none"
+            className="px-3 py-1.5 rounded-lg border border-border hover:bg-muted outline-none min-w-[44px]"
           >
             ‹
           </button>
           <button
             type="button"
             onClick={onNext}
-            className="px-3 py-1 rounded-lg border border-border hover:bg-muted outline-none"
+            className="px-3 py-1.5 rounded-lg border border-border hover:bg-muted outline-none min-w-[44px]"
           >
             ›
           </button>
@@ -98,16 +84,19 @@ export default function MonthCalendar({
       </div>
 
       {/* Weekday headers */}
-      <div className="grid grid-cols-7 gap-2 mb-2 small text-muted-foreground">
+      <div className="grid grid-cols-7 gap-1.5 sm:gap-2 mb-2 small text-muted-foreground">
         {DOW.map((d) => (
-          <div key={d} className="text-center">
-            {d}
-          </div>
+          <div key={d} className="text-center">{d}</div>
         ))}
       </div>
 
       {/* Grid */}
-      <div className="grid grid-cols-7 gap-2">
+      <div
+        className="
+          grid grid-cols-7 gap-1.5 sm:gap-2
+          overflow-hidden
+        "
+      >
         {cells.map(({ date, inMonth }, idx) => {
           const dateStr = date.format("YYYY-MM-DD");
           const isToday = dateStr === todayStr;
@@ -120,26 +109,24 @@ export default function MonthCalendar({
               type="button"
               onClick={() => onSelect?.(dateStr)}
               className={[
-                "relative h-20 md:h-24 w-full rounded-xl border transition-colors",
-                "outline-none focus:outline-none",
+                "relative w-full rounded-xl border transition-colors outline-none focus:outline-none",
+                // Aspect + min heights scale with screen
+                "aspect-[5/4] min-h-[70px] sm:min-h-[88px] md:min-h-[96px]",
                 colorFor(dateStr, inMonth),
                 inMonth ? "hover:bg-muted" : "",
               ].join(" ")}
               title={dateStr}
             >
-              {/* Selected overlay */}
               {isSelected && <div className="pointer-events-none absolute inset-0 rounded-xl ring-2 ring-[var(--ring)]" />}
-              {/* Today (only if not selected) */}
               {!isSelected && isToday && (
                 <div className="pointer-events-none absolute inset-0 rounded-xl ring-1 ring-[var(--ring)]/70" />
               )}
 
               <div className="flex h-full w-full flex-col p-2">
                 <div className="text-left">
-                  <span className={inMonth ? "text-sm md:text-base" : "text-sm opacity-60"}>{date.date()}</span>
+                  <span className={inMonth ? "text-sm sm:text-base" : "text-sm opacity-60"}>{date.date()}</span>
                 </div>
 
-                {/* Groups list (stacked) */}
                 {inMonth && groups.length > 0 && (
                   <div className="mt-1 flex-1 overflow-hidden">
                     <div className="flex flex-col gap-1 max-h-full overflow-hidden">

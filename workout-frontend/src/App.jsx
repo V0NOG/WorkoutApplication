@@ -11,7 +11,7 @@ import { Label } from "./components/ui/label";
 import ThemeToggle from "./components/ThemeToggle.jsx";
 
 /* =========================================================
-   Minimal themed toast system (same as before)
+   Minimal themed toast system
    ========================================================= */
 const ToastCtx = createContext({ push: () => {}, remove: () => {} });
 
@@ -235,7 +235,7 @@ export default function App() {
     const res =
       mode === "login"
         ? await api.login(payload.email, payload.password)
-        : await api.register(payload); // register expects { firstName,lastName,email,password,tz }
+        : await api.register(payload);
     setToken(res.token);
     setUser(res.user);
   }
@@ -246,27 +246,40 @@ export default function App() {
 
   return (
     <ToastProvider>
-      <div className="container">
+      <div className="container pb-safe-b">
         {user && (
-          <header className="sticky top-0 z-10 flex items-center gap-4 py-4 backdrop-blur">
-            <div className="text-xl font-extrabold">
+          <header
+            className="
+              sticky top-0 z-10 flex items-center gap-3 py-3
+              backdrop-blur supports-[backdrop-filter]:bg-background/60
+            "
+          >
+            <div className="text-lg md:text-xl font-extrabold shrink-0">
               Octa<span className="text-primary">Rep</span>
             </div>
 
-            <Tabs value={tab} onValueChange={setTab} className="ml-2">
-              <TabsList>
-                <TabsTrigger value="today">Today</TabsTrigger>
-                <TabsTrigger value="templates">Templates</TabsTrigger>
-                <TabsTrigger value="stats">Stats</TabsTrigger>
-              </TabsList>
-            </Tabs>
+            {/* Desktop/Tablet Tabs (hidden on mobile; mobile gets bottom bar) */}
+            <div className="hidden sm:block">
+              <Tabs value={tab} onValueChange={setTab} className="ml-1">
+                <TabsList
+                  className="
+                    overflow-x-auto no-scrollbar whitespace-nowrap
+                    rounded-xl
+                  "
+                >
+                  <TabsTrigger value="today">Today</TabsTrigger>
+                  <TabsTrigger value="templates">Templates</TabsTrigger>
+                  <TabsTrigger value="stats">Stats</TabsTrigger>
+                </TabsList>
+              </Tabs>
+            </div>
 
             <div className="flex-1" />
 
             <ThemeToggle />
 
             {/* Avatar dropdown */}
-            <div className="ml-2">
+            <div className="ml-1">
               <AvatarDropdown
                 user={user}
                 onLogout={logout}
@@ -279,7 +292,7 @@ export default function App() {
         {!user ? (
           <AuthCard onAuth={handleAuth} />
         ) : (
-          <main className="stack mt-4">
+          <main className="stack mt-3 md:mt-4 mb-[calc(env(safe-area-inset-bottom)+64px)] sm:mb-4">
             {tab === "today" && <Today />}
             {tab === "templates" && <Templates />}
             {tab === "stats" && <Stats />}
@@ -293,13 +306,48 @@ export default function App() {
           user={user}
           onSave={(u) => setUser(u)}
         />
+
+        {/* ===== Mobile Bottom Tab Bar (phones only) ===== */}
+        {user && (
+          <nav
+            className="
+              sm:hidden fixed bottom-0 left-0 right-0 z-20
+              border-t border-border bg-card/95 backdrop-blur
+              pb-safe-b
+            "
+          >
+            <div className="grid grid-cols-3 gap-1 p-2">
+              <MobileTabButton label="Today" active={tab==="today"} onClick={()=>setTab("today")} />
+              <MobileTabButton label="Templates" active={tab==="templates"} onClick={()=>setTab("templates")} />
+              <MobileTabButton label="Stats" active={tab==="stats"} onClick={()=>setTab("stats")} />
+            </div>
+          </nav>
+        )}
       </div>
     </ToastProvider>
   );
 }
 
+function MobileTabButton({ label, active, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className={[
+        "h-12 rounded-xl text-sm font-medium",
+        "border transition active:scale-[.99]",
+        active
+          ? "bg-background border-input shadow-sm"
+          : "bg-card border-border text-muted-foreground"
+      ].join(" ")}
+      aria-pressed={active}
+    >
+      {label}
+    </button>
+  );
+}
+
 /* =========================================================
-   Auth Card (unchanged from your toast version)
+   Auth Card (unchanged logic, touch-friendly tweaks)
    ========================================================= */
 
 function AuthCard({ onAuth }) {
@@ -340,7 +388,6 @@ function AuthCard({ onAuth }) {
   }
   const strength = strengthScore(password);
   const strengthLabel = strength <= 1 ? "Weak" : strength === 2 ? "Fair" : strength === 3 ? "Good" : "Strong";
-  const strengthPct = (strength / 4) * 100;
 
   const canRegister =
     mode === "register" &&
@@ -392,9 +439,9 @@ function AuthCard({ onAuth }) {
   function onKeyDown(e) { if (e.key === "Enter" && !showForgot) doAuth(); }
 
   return (
-    <div className="min-h-[70vh] grid place-items-center">
+    <div className="min-h-screen grid place-items-center px-2">
       <style>{`.auth-input:-webkit-autofill,.auth-input:-webkit-autofill:hover,.auth-input:-webkit-autofill:focus{-webkit-box-shadow:0 0 0px 1000px hsl(var(--background)) inset!important;box-shadow:0 0 0px 1000px hsl(var(--background)) inset!important;-webkit-text-fill-color:hsl(var(--foreground))!important;caret-color:hsl(var(--foreground))!important}`}</style>
-      <div className="card w-full max-w-md p-6 md:p-8 space-y-5" onKeyDown={onKeyDown}>
+      <div className="card w-full max-w-md p-5 md:p-8 space-y-5" onKeyDown={onKeyDown}>
         <div className="space-y-1">
           <div className="text-2xl font-extrabold tracking-tight">Welcome to <span className="text-primary">OctaRep</span></div>
           <p className="small">Simple daily workout tracking — targets, sets, and streaks.</p>

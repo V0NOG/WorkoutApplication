@@ -30,36 +30,53 @@ export default function CalendarHeatmap({ days = [], onClick }) {
   const last35 = days.slice(-35);
 
   return (
-    <div className="grid grid-cols-7 gap-1 p-3 rounded-xl border border-border bg-card">
-      {last35.map((d) => {
-        const dateObj = new Date(d.date);
-        const dayNum = isNaN(dateObj) ? "" : dateObj.getDate();
-        let bg = "bg-muted"; // default/unscheduled -> theme aware
-        if (d.scheduled) bg = d.met ? "bg-emerald-500/20" : "bg-rose-500/20";
+    <div className="rounded-xl border border-border bg-card p-2 sm:p-3 overflow-x-auto no-scrollbar">
+      {/* Use a fluid 7-col template; cells keep aspect to avoid overflow */}
+      <div
+        className="
+          grid gap-1
+          [grid-template-columns:repeat(7,minmax(2.5rem,1fr))]
+          sm:[grid-template-columns:repeat(7,minmax(3rem,1fr))]
+          md:[grid-template-columns:repeat(7,minmax(3.75rem,1fr))]
+        "
+      >
+        {last35.map((d) => {
+          const dateObj = new Date(d.date);
+          const dayNum = isNaN(dateObj) ? "" : dateObj.getDate();
+          let bg = "bg-secondary"; // default/unscheduled -> theme aware
+          if (d.scheduled) bg = d.met ? "bg-emerald-500/20" : "bg-rose-500/20";
+          const groups = Array.isArray(d.groups) ? d.groups : [];
 
-        const groups = Array.isArray(d.groups) ? d.groups : [];
-
-        return (
-          <button
-            key={d.date}
-            title={`${d.date}${d.scheduled ? (d.met ? " ✓" : " ✕") : ""}`}
-            onClick={() => onClick?.(d.date)}
-            className={`rounded-xl border border-border ${bg} hover:outline hover:outline-2 hover:outline-[var(--ring)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--ring)] p-1 h-20 w-28 text-left`}
-          >
-            <div className="text-[10px] text-muted-foreground">{dayNum}</div>
-            {groups.length > 0 && (
-              <div className="mt-1 flex flex-col gap-1 overflow-hidden">
-                {groups.slice(0, 2).map((g, i) => (
-                  <GroupPill key={`${d.date}-${g}-${i}`} name={g} />
-                ))}
-                {groups.length > 2 && (
-                  <div className="text-[10px] text-muted-foreground">+{groups.length - 2} more…</div>
-                )}
-              </div>
-            )}
-          </button>
-        );
-      })}
+          return (
+            <button
+              key={d.date}
+              title={`${d.date}${d.scheduled ? (d.met ? " ✓" : " ✕") : ""}`}
+              onClick={() => onClick?.(d.date)}
+              className={[
+                "rounded-xl border border-border",
+                "hover:outline hover:outline-2 hover:outline-[var(--ring)]",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--ring)]",
+                "p-1 sm:p-1.5 text-left",
+                // Maintain shape responsively instead of fixed w/h:
+                "aspect-[4/3] min-h-[60px] sm:min-h-[72px] md:min-h-[80px]",
+                bg,
+              ].join(" ")}
+            >
+              <div className="text-[10px] text-muted-foreground">{dayNum}</div>
+              {groups.length > 0 && (
+                <div className="mt-1 flex flex-col gap-1 overflow-hidden">
+                  {groups.slice(0, 2).map((g, i) => (
+                    <GroupPill key={`${d.date}-${g}-${i}`} name={g} />
+                  ))}
+                  {groups.length > 2 && (
+                    <div className="text-[10px] text-muted-foreground">+{groups.length - 2} more…</div>
+                  )}
+                </div>
+              )}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

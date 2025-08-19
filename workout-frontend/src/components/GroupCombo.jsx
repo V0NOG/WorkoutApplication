@@ -12,9 +12,9 @@ export default function GroupCombo({
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState(value || "");
-  const [created, setCreated] = useState([]);             // locally created options
-  const [removedLC, setRemovedLC] = useState(() => new Set()); // locally hidden (from props)
-  const [editingOrigLC, setEditingOrigLC] = useState(null);    // lowercased name being edited
+  const [created, setCreated] = useState([]);
+  const [removedLC, setRemovedLC] = useState(() => new Set());
+  const [editingOrigLC, setEditingOrigLC] = useState(null);
 
   const rootRef = useRef(null);
   const inputRef = useRef(null);
@@ -22,14 +22,11 @@ export default function GroupCombo({
 
   const [overlayPos, setOverlayPos] = useState({ top: 0, left: 0, width: 0 });
 
-  // keep input synced to external value
   useEffect(() => { setQuery(value || ""); }, [value]);
 
-  // helper sets (lowercased)
   const createdLC = useMemo(() => new Set(created.map((g) => (g || "").toLowerCase())), [created]);
   const optionsLC = useMemo(() => new Set(options.map((g) => (g || "").toLowerCase())), [options]);
 
-  // build merged list: visible options (minus removed) + created; de-dupe (case-insensitive)
   const mergedOptions = useMemo(() => {
     const out = [];
     const seen = new Set();
@@ -48,19 +45,25 @@ export default function GroupCombo({
     return out;
   }, [options, created, removedLC]);
 
-  // filtered list for dropdown
   const list = useMemo(() => {
     const q = (query || "").trim().toLowerCase();
     if (!q) return mergedOptions.slice(0, 8);
     return mergedOptions.filter((g) => g.toLowerCase().includes(q)).slice(0, 8);
   }, [mergedOptions, query]);
 
-  // position dropdown (fixed portal) so it can't be clipped by cards
+  const clampToViewport = (left, width, pad = 8) => {
+    const vw = window.innerWidth || 360;
+    const maxLeft = Math.max(pad, vw - width - pad);
+    return Math.min(Math.max(left, pad), maxLeft);
+  };
+
   const updateOverlay = () => {
     const el = inputRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    setOverlayPos({ top: r.bottom + 6, left: r.left, width: r.width });
+    const width = Math.min(Math.max(r.width, 240), Math.min(420, window.innerWidth - 16));
+    const left = clampToViewport(r.left, width, 8);
+    setOverlayPos({ top: r.bottom + 6, left, width });
   };
 
   useEffect(() => {
@@ -76,7 +79,6 @@ export default function GroupCombo({
     };
   }, [open]);
 
-  // close when clicking outside (field or portal)
   useEffect(() => {
     const onDoc = (e) => {
       const inRoot = rootRef.current?.contains(e.target);
@@ -95,7 +97,6 @@ export default function GroupCombo({
     });
   }
 
-  // pick value (optionally keep dropdown open)
   const pick = (g, { close = true } = {}) => {
     if (!g) return;
     onChange?.(g);
@@ -103,24 +104,16 @@ export default function GroupCombo({
     if (close) setOpen(false);
   };
 
-  // ENTER to create (or rename if editing)
   const createOrRenameFromQuery = () => {
     const raw = (query || "").trim();
     if (!raw) return;
     const lc = raw.toLowerCase();
 
-    // If editing an existing item
     if (editingOrigLC) {
       const orig = editingOrigLC;
-      // if original was from props -> hide original
       if (optionsLC.has(orig)) {
-        setRemovedLC((prev) => {
-          const next = new Set(prev);
-          next.add(orig);
-          return next;
-        });
+        setRemovedLC((prev) => new Set(prev).add(orig));
       } else {
-        // original was from created -> replace in created
         setCreated((prev) => {
           const arr = prev.slice();
           const idx = arr.findIndex((g) => (g || "").toLowerCase() === orig);
@@ -128,30 +121,21 @@ export default function GroupCombo({
           return arr;
         });
       }
-      // add new name to created if it doesn't already exist
-      setCreated((prev) => {
-        if (prev.some((g) => (g || "").toLowerCase() === lc) || optionsLC.has(lc)) return prev;
-        return [...prev, raw];
-      });
+      setCreated((prev) => (prev.some((g) => (g || "").toLowerCase() === lc) || optionsLC.has(lc)) ? prev : [...prev, raw]);
       setEditingOrigLC(null);
-      pick(raw, { close: false }); // keep open to show the updated list
+      pick(raw, { close: false });
       setOpen(true);
       updateOverlay();
       return;
     }
 
-    // Not editing: creating new if not exists
-    const already =
-      mergedOptions.some((g) => (g || "").toLowerCase() === lc);
-    if (!already) {
-      setCreated((prev) => [...prev, raw]); // show immediately in dropdown
-    }
-    pick(raw, { close: false }); // keep open so user sees the new entry
+    const already = mergedOptions.some((g) => (g || "").toLowerCase() === lc);
+    if (!already) setCreated((prev) => [...prev, raw]);
+    pick(raw, { close: false });
     setOpen(true);
     updateOverlay();
   };
 
-  // actions on each list row
   const startEdit = (g) => {
     const lc = (g || "").toLowerCase();
     setEditingOrigLC(lc);
@@ -163,17 +147,11 @@ export default function GroupCombo({
   const removeItem = (g) => {
     const lc = (g || "").toLowerCase();
     if (createdLC.has(lc)) {
-      // remove from created
       setCreated((prev) => prev.filter((x) => (x || "").toLowerCase() !== lc));
     } else if (optionsLC.has(lc)) {
-      setRemovedLC((prev) => {
-        const next = new Set(prev);
-        next.add(lc);
-        return next;
-      });
+      setRemovedLC((prev) => new Set(prev).add(lc));
     }
     if ((query || "").toLowerCase() === lc) {
-      // if currently selected, clear input but keep dropdown open for a new pick
       setQuery("");
       onChange?.("");
     }
@@ -190,24 +168,17 @@ export default function GroupCombo({
         value={query}
         onChange={(e) => {
           setQuery(e.target.value);
-          onChange?.(e.target.value); // keep parent form.group in sync as you type
+          onChange?.(e.target.value);
           if (!open) setOpen(true);
         }}
         onFocus={() => { setOpen(true); updateOverlay(); }}
         onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();       // stop parent submit
-            createOrRenameFromQuery();
-          } else if (e.key === "Escape") {
-            if (editingOrigLC) setEditingOrigLC(null);
-            setOpen(false);
-          } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-            setOpen(true);
-          }
+          if (e.key === "Enter") { e.preventDefault(); createOrRenameFromQuery(); }
+          else if (e.key === "Escape") { if (editingOrigLC) setEditingOrigLC(null); setOpen(false); }
+          else if (e.key === "ArrowDown" || e.key === "ArrowUp") { setOpen(true); }
         }}
         placeholder={placeholder}
         className={cn(
-          // match other inputs
           "h-11 w-full rounded-xl border border-input bg-background text-foreground text-base",
           "px-3 placeholder:text-muted-foreground",
           "focus:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:border-ring",
@@ -215,21 +186,11 @@ export default function GroupCombo({
         )}
       />
 
-      {/* Portal dropdown (fixed, above cards) */}
       {open && createPortal(
         <div
           ref={overlayRef}
-          style={{
-            position: "fixed",
-            top: overlayPos.top,
-            left: overlayPos.left,
-            width: overlayPos.width,
-            zIndex: 9999,
-          }}
-          className={cn(
-            "rounded-xl border bg-popover text-popover-foreground shadow-md",
-            "border-border"
-          )}
+          style={{ position: "fixed", top: overlayPos.top, left: overlayPos.left, width: overlayPos.width, zIndex: 9999 }}
+          className="rounded-xl border bg-popover text-popover-foreground shadow-md border-border"
           role="listbox"
         >
           {list.length === 0 ? (
@@ -240,7 +201,7 @@ export default function GroupCombo({
             <ul className="max-h-64 overflow-auto py-1">
               {list.map((g) => (
                 <li key={g}>
-                  <div className="flex items-center gap-2 px-3 py-2">
+                  <div className="flex items-center gap-2 px-3 py-2 min-h-[42px]">
                     <button
                       type="button"
                       onClick={() => pick(g)}
@@ -248,13 +209,11 @@ export default function GroupCombo({
                     >
                       {g}
                     </button>
-
-                    {/* Actions */}
                     <div className="flex items-center gap-1 shrink-0">
                       <button
                         type="button"
                         title="Edit"
-                        onMouseDown={(e) => e.preventDefault()} // prevent focus steal
+                        onMouseDown={(e) => e.preventDefault()}
                         onClick={(e) => { e.stopPropagation(); startEdit(g); }}
                         className="p-1 rounded-md hover:bg-muted"
                       >
@@ -273,8 +232,6 @@ export default function GroupCombo({
                   </div>
                 </li>
               ))}
-
-              {/* Quick action at bottom if typed text isn't already in list */}
               {query?.trim() &&
                 !mergedOptions.some((o) => o.toLowerCase() === query.trim().toLowerCase()) && (
                   <li>
