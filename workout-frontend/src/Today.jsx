@@ -455,31 +455,26 @@ export default function Today() {
         const m = await api.me();
         setMe(m);
 
-        // Who should see the birthday surprise?
         const emails = (import.meta.env.VITE_BDAY_EMAILS || "")
           .split(",")
           .map(s => s.trim().toLowerCase())
           .filter(Boolean);
 
         const okEmail = emails.includes((m?.email || "").toLowerCase());
-
-        // Use the browser's timezone (e.g., Europe/London)
         const tz = getBrowserTimeZone();
 
-        const isBirthday = bdayTestOverride() || isMonthDayInTz(tz, "08", "16");
+        const override = bdayTestOverride();
+        const isRealBirthday = isMonthDayInTz(tz, "08", "16");
+        const shouldShow = override || (okEmail && isRealBirthday);
 
-        // Show at most once per day per user (keyed by email + date in tz)
         const todayInTz = new Intl.DateTimeFormat("en-CA", {
-          timeZone: tz,
-          year: "numeric",
-          month: "2-digit",
-          day: "2-digit",
-        }).format(new Date()); // YYYY-MM-DD
+          timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
+        }).format(new Date());
 
         const seenKey = `bday-shown:${(m?.email || "unknown").toLowerCase()}:${todayInTz}`;
         const alreadyShown = localStorage.getItem(seenKey);
 
-        if (okEmail && isBirthday && !alreadyShown) {
+        if (shouldShow && !alreadyShown) {
           setShowBday(true);
           localStorage.setItem(seenKey, "1");
         }
