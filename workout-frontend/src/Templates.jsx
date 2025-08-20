@@ -1002,6 +1002,46 @@ export default function Templates() {
             </div>
           </div>
 
+          {form.showProg && (
+            <div className="grid grid-cols-12 gap-4 items-end">
+              <div className="col-span-12 md:col-span-6">
+                <div className="small text-muted-foreground h-5">Progression weekly % (0 disables)</div>
+                <Input className={inputClass} type="number" value={form.weeklyPct} onChange={(e)=>upd("weeklyPct", e.target.value)} />
+              </div>
+              <div className="col-span-12 md:col-span-6">
+                <div className="small text-muted-foreground h-5">Progression cap (optional)</div>
+                <Input className={inputClass} placeholder="e.g., 300" value={form.cap} onChange={(e)=>upd("cap", e.target.value)} />
+              </div>
+            </div>
+          )}
+
+          {form.showDeload && (
+            <div className="grid grid-cols-12 gap-4 items-end">
+              <div className="col-span-12 md:col-span-6">
+                <div className="small text-muted-foreground h-5">Deload every N weeks (0 disables)</div>
+                <Input className={inputClass} type="number" value={form.deloadEvery} onChange={(e)=>upd("deloadEvery", e.target.value)} />
+              </div>
+              <div className="col-span-12 md:col-span-6">
+                <div className="small text-muted-foreground h-5">Deload scale (e.g., 0.7 = 70%)</div>
+                <Input className={inputClass} type="number" step="0.05" value={form.deloadScale} onChange={(e)=>upd("deloadScale", e.target.value)} />
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-12 gap-4 items-end">
+            <div className="col-span-12 md:col-span-6">
+              <div className="small text-muted-foreground h-5">Start date</div>
+              <DatePicker
+                value={form.startDate || todayLocalISO()}
+                onChange={(v)=>upd("startDate", v || todayLocalISO())}
+              />
+            </div>
+            <div className="col-span-12 md:col-span-6">
+              <div className="small text-muted-foreground h-5">End date (optional)</div>
+              <DatePicker value={form.endDate} onChange={(v)=>upd("endDate", v)} />
+            </div>
+          </div>
+
           <div className="pt-1">
             <Button className="w-full h-11" onClick={create}>Create template</Button>
           </div>
