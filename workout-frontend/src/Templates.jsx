@@ -75,11 +75,87 @@ function Segmented({ value, onChange, options, className = "" }) {
   );
 }
 
+// Small label that matches the “Weight pattern” header
+function SmallLabel({ children }) {
+  return <div className="small text-muted-foreground h-5">{children}</div>;
+}
+
+// Numeric-only input (digits + optional single decimal point)
+function NumericInput({ value, onChange, className = "", ...rest }) {
+  const handleKeyDown = (e) => {
+    const k = e.key;
+    if (k === "e" || k === "E" || k === "+" || k === "-") { e.preventDefault(); return; }
+    if (["Backspace","Delete","Tab","ArrowLeft","ArrowRight","Home","End","Enter"].includes(k)) return;
+    if (k === ".") { if (String(value || "").includes(".")) e.preventDefault(); return; }
+    if (!/^\d$/.test(k)) e.preventDefault();
+  };
+  const handleChange = (e) => {
+    let s = e.target.value.replace(/[^\d.]/g, "");
+    const parts = s.split(".");
+    if (parts.length > 2) s = parts[0] + "." + parts.slice(1).join("");
+    onChange?.({ target: { value: s } });
+  };
+  return (
+    <Input
+      type="text"
+      inputMode="decimal"
+      pattern="[0-9]*[.]?[0-9]*"
+      className={className}
+      value={value}
+      onKeyDown={handleKeyDown}
+      onChange={handleChange}
+      {...rest}
+    />
+  );
+}
+
 function todayLocalISO() {
   const d = new Date();
   const off = d.getTimezoneOffset();
   const local = new Date(d.getTime() - off * 60 * 1000);
   return local.toISOString().slice(0, 10); // YYYY-MM-DD
+}
+
+/* ---------------- Weight-pattern helpers & summary ---------------- */
+
+// Auto step from sets/start/end; snapped to nearest 0.5 kg
+function autoStepFor(sets, start, end) {
+  const S = Math.max(2, Number(sets) || 0); // at least 2 sets to have a step
+  const a = Number(start), b = Number(end);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return "";
+  const raw = Math.abs(b - a) / (S - 1);
+  const snapped = Math.round(raw * 2) / 2; // nearest 0.5
+  return snapped > 0 ? String(snapped) : "";
+}
+
+// summary string for list rows
+function summarizeWeightPattern(t) {
+  const wp = t.weightPattern || {};
+  const sets = Number(t.dailyTarget || 0) || 0;
+  const start = Number(wp.start ?? t.weight);
+  const end   = Number(wp.end   ?? t.weight);
+  const stepStr = wp.step != null && wp.step !== ""
+    ? String(wp.step)
+    : autoStepFor(sets, start, end);
+
+  switch (wp.mode) {
+    case "fixed":
+      return Number.isFinite(start) ? `${start} kg` : (t.weight != null ? `${t.weight} kg` : "");
+    case "drop":
+      if (Number.isFinite(start) && Number.isFinite(end)) {
+        return `Drop ${start}→${end} kg${stepStr ? ` (−${stepStr} kg)` : ""}`;
+      }
+      return "";
+    case "ramp":
+      if (Number.isFinite(start) && Number.isFinite(end)) {
+        return `Ramp ${start}→${end} kg${stepStr ? ` (+${stepStr} kg)` : ""}`;
+      }
+      return "";
+    case "custom":
+      return Array.isArray(wp.perSet) && wp.perSet.length ? `Sets ${wp.perSet.join(" / ")} kg` : "";
+    default:
+      return t.weight != null ? `${t.weight} kg` : "";
+  }
 }
 
 export default function Templates() {
@@ -88,35 +164,33 @@ export default function Templates() {
 
   const defaultForm = () => ({
     name: "",
-    kind: "calisthenics",     // calisthenics | gym
+    kind: "calisthenics",
     group: "",
     unit: "reps",
-    dailyTarget: 200,         // Cali: daily target | Gym: # sets
-    defaultSetSize: 20,       // Cali: set size      | Gym: # reps
-    weight: "",               // Gym-only
-    daysOfWeek: [1,2,3,4,5],  // Mon–Fri
+    dailyTarget: 200,        // Cali: daily target | Gym: # sets
+    defaultSetSize: 20,      // Cali: set size      | Gym: # reps
+    weight: "",              // legacy, only used for Fixed UX
+    daysOfWeek: [1,2,3,4,5],
     startDate: todayLocalISO(),
     endDate: "",
-    // Progression & Deload
-    progMode: "volume",       // "volume" | "weight" (gym)
+    progMode: "volume",      // "volume" | "weight" (gym)
     weeklyPct: 0,
     cap: "",
     deloadEvery: 0,
     deloadScale: 0.7,
-    // visibility toggles
     showProg: false,
     showDeload: false,
+    // UI state for weight pattern. _stepManual is UI-only; not sent to API.
+    weightPattern: { mode: "fixed", start: "", end: "", step: "", perSet: "", _stepManual: false },
   });
 
   const [form, setForm] = useState(defaultForm());
   const [editingId, setEditingId] = useState(null);
   const [draft, setDraft] = useState(null);
 
-  // Inline delete confirm state
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const [deleting, setDeleting] = useState(false);
 
-  // ref to templates list (so we can scroll into view after create)
   const listRef = useRef(null);
 
   function upd(k, v)  { setForm((p) => ({ ...p, [k]: v })); }
@@ -133,6 +207,38 @@ export default function Templates() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /* ---------------- Auto-step: only when NOT manually overridden ---------------- */
+
+  // EDIT (draft)
+  useEffect(() => {
+    if (!draft || draft.kind !== "gym") return;
+    const mode = draft.weightPattern?.mode || "fixed";
+    if (mode !== "drop" && mode !== "ramp") return;
+    if (draft.weightPattern?._stepManual) return; // user is controlling it
+    const start = draft.weightPattern?.start ?? draft.weight;
+    const end   = draft.weightPattern?.end   ?? draft.weight;
+    const next  = autoStepFor(draft.dailyTarget, start, end);
+    const cur   = String(draft.weightPattern?.step ?? "");
+    if (next !== cur) {
+      setDraft(p => ({ ...p, weightPattern: { ...(p.weightPattern || {}), step: next } }));
+    }
+  }, [draft?.kind, draft?.dailyTarget, draft?.weightPattern?.mode, draft?.weightPattern?.start, draft?.weightPattern?.end, draft?.weight, draft?.weightPattern?._stepManual]);
+
+  // CREATE (form)
+  useEffect(() => {
+    if (form.kind !== "gym") return;
+    const mode = form.weightPattern?.mode || "fixed";
+    if (mode !== "drop" && mode !== "ramp") return;
+    if (form.weightPattern?._stepManual) return;
+    const start = form.weightPattern?.start ?? form.weight;
+    const end   = form.weightPattern?.end   ?? form.weight;
+    const next  = autoStepFor(form.dailyTarget, start, end);
+    const cur   = String(form.weightPattern?.step ?? "");
+    if (next !== cur) {
+      setForm(p => ({ ...p, weightPattern: { ...(p.weightPattern || {}), step: next } }));
+    }
+  }, [form.kind, form.dailyTarget, form.weightPattern?.mode, form.weightPattern?.start, form.weightPattern?.end, form.weight, form.weightPattern?._stepManual]);
+
   const groupOptions = useMemo(() => {
     const s = new Set(list.map(t => (t.group || "").trim()).filter(Boolean));
     return Array.from(s).sort((a,b) => a.localeCompare(b));
@@ -144,6 +250,20 @@ export default function Templates() {
       const capVal      = form.showProg    ? (form.cap ? Number(form.cap) : null) : null;
       const deloadEvery = form.showDeload  ? (Number(form.deloadEvery) || 0) : 0;
       const deloadScale = form.showDeload  ? (Number(form.deloadScale) || 0.7) : 0.7;
+      const toNum = v => (v === "" || v == null) ? null : Number(v);
+
+      const wp = form.kind === "gym"
+        ? (() => {
+            const mode = form.weightPattern?.mode || 'fixed';
+            const perSetArr = String(form.weightPattern?.perSet || "")
+              .split(",").map(s=>s.trim()).filter(Boolean).map(Number);
+            const start = mode === "fixed"
+              ? toNum(form.weight || form.weightPattern?.start)
+              : toNum(form.weightPattern?.start);
+            const end = mode === "fixed" ? start : toNum(form.weightPattern?.end);
+            return { mode, start, end, step: toNum(form.weightPattern?.step), perSet: perSetArr };
+          })()
+        : undefined;
 
       const payload = {
         name: form.name.trim(),
@@ -153,7 +273,8 @@ export default function Templates() {
         dailyTarget: Number(form.dailyTarget),
         defaultSetSize: Number(form.defaultSetSize),
         ...(form.kind === "gym" && {
-          weight: form.weight === "" ? null : Number(form.weight),
+          weight: form.weight === "" ? null : Number(form.weight), // legacy fixed UX
+          weightPattern: wp
         }),
         schedule: {
           type: "weekly",
@@ -161,16 +282,8 @@ export default function Templates() {
           startDate: form.startDate || new Date().toISOString().slice(0,10),
           endDate: form.endDate || null,
         },
-        progression: {
-          mode: form.progMode,
-          weeklyPct,
-          cap: capVal,
-        },
-        deloadRule: {
-          mode: form.progMode,
-          everyNWeeks: deloadEvery,
-          scale: deloadScale,
-        },
+        progression: { mode: form.progMode, weeklyPct, cap: capVal },
+        deloadRule: { mode: form.progMode, everyNWeeks: deloadEvery, scale: deloadScale },
       };
 
       if (!payload.name) throw new Error("Please enter a name for the template.");
@@ -178,18 +291,14 @@ export default function Templates() {
       await api.createTemplate(payload);
       pingTemplatesChanged();
       await refresh();
-
-      // clear the form back to defaults
       setForm(defaultForm());
 
-      // success toast
       toast({
         title: "Template created",
         description: `“${payload.name}” was added${payload.group ? ` to ${payload.group}` : ""}.`,
         variant: "success"
       });
 
-      // ensure user sees the list top
       requestAnimationFrame(() => {
         listRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
@@ -202,10 +311,7 @@ export default function Templates() {
     }
   }
 
-  // Themed inline delete confirmation
-  function askDelete(id) {
-    setConfirmDeleteId(id);
-  }
+  function askDelete(id) { setConfirmDeleteId(id); }
   async function doDelete(id) {
     setDeleting(true);
     try {
@@ -214,11 +320,7 @@ export default function Templates() {
       await refresh();
       toast({ title: "Template deleted", variant: "success" });
     } catch (e) {
-      toast({
-        title: "Delete failed",
-        description: e?.message || "Please try again.",
-        variant: "error"
-      });
+      toast({ title: "Delete failed", description: e?.message || "Please try again.", variant: "error" });
     } finally {
       setDeleting(false);
       setConfirmDeleteId(null);
@@ -249,18 +351,38 @@ export default function Templates() {
       deloadScale: t.deloadRule?.scale ?? 0.7,
       showProg: hasProg,
       showDeload: hasDeload,
+      // include UI-only _stepManual flag default false
+      weightPattern: {
+        mode: t.weightPattern?.mode || 'fixed',
+        start: t.weightPattern?.start ?? (t.weight ?? ""),
+        end:   t.weightPattern?.end   ?? (t.weight ?? ""),
+        step:  t.weightPattern?.step  ?? "",
+        perSet: Array.isArray(t.weightPattern?.perSet) ? t.weightPattern.perSet.join(", ") : "",
+        _stepManual: false,
+      },
     });
   }
   function cancelEdit() { setEditingId(null); setDraft(null); setConfirmDeleteId(null); }
 
   async function saveEdit() {
     if (!editingId || !draft) return;
-
     try {
-      const weeklyPct   = draft.showProg    ? (Number(draft.weeklyPct) || 0) : 0;
-      const capVal      = draft.showProg    ? (draft.cap === "" ? null : Number(draft.cap)) : null;
-      const deloadEvery = draft.showDeload  ? (Number(draft.deloadEvery) || 0) : 0;
-      const deloadScale = draft.showDeload  ? (Number(draft.deloadScale) || 0.7) : 0.7;
+      const weeklyPct = draft.showProg ? (Number(draft.weeklyPct) || 0) : 0;
+      const capVal = draft.showProg ? (draft.cap === "" ? null : Number(draft.cap)) : null;
+      const deloadEvery = draft.showDeload ? (Number(draft.deloadEvery) || 0) : 0;
+      const deloadScale = draft.showDeload ? (Number(draft.deloadScale) || 0.7) : 0.7;
+      const toNum = v => (v === "" || v == null) ? null : Number(v);
+
+      const wp = draft.kind === "gym" ? (() => {
+        const mode = draft.weightPattern?.mode || "fixed";
+        const perSetArr = String(draft.weightPattern?.perSet || "")
+          .split(",").map(s=>s.trim()).filter(Boolean).map(Number);
+        const start = mode === "fixed"
+          ? toNum(draft.weight || draft.weightPattern?.start)
+          : toNum(draft.weightPattern?.start);
+        const end = mode === "fixed" ? start : toNum(draft.weightPattern?.end);
+        return { mode, start, end, step: toNum(draft.weightPattern?.step), perSet: perSetArr };
+      })() : undefined;
 
       const payload = {
         name: draft.name.trim(),
@@ -270,7 +392,8 @@ export default function Templates() {
         dailyTarget: Number(draft.dailyTarget),
         defaultSetSize: Number(draft.defaultSetSize),
         ...(draft.kind === "gym" && {
-          weight: draft.weight === "" ? null : Number(draft.weight),
+          weight: draft.weight === "" ? null : Number(draft.weight), // legacy fixed UX
+          weightPattern: wp,
         }),
         schedule: {
           type: "weekly",
@@ -278,16 +401,8 @@ export default function Templates() {
           startDate: draft.startDate || new Date().toISOString().slice(0,10),
           endDate: draft.endDate || null,
         },
-        progression: {
-          mode: draft.progMode,
-          weeklyPct,
-          cap: capVal,
-        },
-        deloadRule: {
-          mode: draft.progMode,
-          everyNWeeks: deloadEvery,
-          scale: deloadScale,
-        },
+        progression: { mode: draft.progMode, weeklyPct, cap: capVal },
+        deloadRule: { mode: draft.progMode, everyNWeeks: deloadEvery, scale: deloadScale },
       };
 
       if (!payload.name) throw new Error("Please enter a name for the template.");
@@ -336,9 +451,9 @@ export default function Templates() {
                       const gym = t.kind === "gym";
                       const hasProg = (t.progression?.weeklyPct ?? 0) > 0 || (t.progression?.cap ?? null) != null;
                       const hasDeload = (t.deloadRule?.everyNWeeks ?? 0) > 0;
-                      const totalReps = gym
-                        ? Number(t.dailyTarget || 0) * Number(t.defaultSetSize || 0)
-                        : null;
+                      const totalReps = gym ? Number(t.dailyTarget || 0) * Number(t.defaultSetSize || 0) : null;
+
+                      const wpSummary = gym ? summarizeWeightPattern(t) : "";
 
                       return (
                         <div key={t._id} className="p-4 md:p-5 flex items-start gap-3">
@@ -350,7 +465,7 @@ export default function Templates() {
                                   <span className="uppercase">GYM</span>{" • "}
                                   {t.dailyTarget} sets • {t.defaultSetSize} reps
                                   {totalReps > 0 ? <> {" "}→ <strong>{totalReps} total</strong></> : null}
-                                  {t.weight != null ? ` • ${t.weight} kg` : ""}
+                                  {wpSummary ? ` • ${wpSummary}` : ""}
                                   {" • Days: "}{t.schedule?.daysOfWeek?.map((i)=>DOW[i]).join(", ")}
                                   {" • Prog: "}{hasProg ? (t.progression?.mode || "volume") : "off"}
                                   {" • Deload: "}{hasDeload ? `${t.deloadRule?.everyNWeeks}w @ ${Math.round((t.deloadRule?.scale ?? 0.7)*100)}%` : "off"}
@@ -415,7 +530,7 @@ export default function Templates() {
                       <div key={t._id} className="p-4 md:p-5 space-y-5">
                         <div className="grid grid-cols-12 gap-4 items-end">
                           <div className="col-span-12 sm:col-span-4">
-                            <Label>Type</Label>
+                            <SmallLabel>Type</SmallLabel>
                             <Segmented
                               className="text-base"
                               value={draft.kind}
@@ -423,6 +538,7 @@ export default function Templates() {
                                 if (k === "gym") {
                                   dset("kind", "gym");
                                   dset("dailyTarget", 5);
+                                  dset("weightPattern", { mode: "fixed", start: draft.weight || "", end: draft.weight || "", step: "", perSet: "", _stepManual:false });
                                 } else {
                                   dset("kind", "calisthenics");
                                   dset("dailyTarget", 200);
@@ -435,7 +551,7 @@ export default function Templates() {
                             />
                           </div>
                           <div className="col-span-12 sm:col-span-8">
-                            <Label>Group (type to create or pick)</Label>
+                            <SmallLabel>Group (type to create or pick)</SmallLabel>
                             <GroupCombo
                               options={groupOptions}
                               value={draft.group}
@@ -446,33 +562,133 @@ export default function Templates() {
                         </div>
 
                         <div>
-                          <Label>Name</Label>
+                          <SmallLabel>Name</SmallLabel>
                           <Input className={inputClass} value={draft.name} onChange={(e)=>dset("name", e.target.value)} />
                         </div>
 
-                        {/* Targets (animated) */}
+                        {/* Targets */}
                         <div className="grid grid-cols-12 gap-4 items-end">
-                          <div className={["col-span-12", gym ? "md:col-span-4" : "md:col-span-6", "transition-all duration-300"].join(" ")}>
-                            <Label>{gym ? "Number of sets (per day)" : "Daily target"}</Label>
-                            <Input className={inputClass} type="number" value={draft.dailyTarget} onChange={(e)=>dset("dailyTarget", e.target.value)} />
+                          <div className={["col-span-12", "md:col-span-6", "transition-all duration-300"].join(" ")}>
+                            <SmallLabel>{gym ? "Number of sets (per day)" : "Daily target"}</SmallLabel>
+                            <NumericInput className={inputClass} value={draft.dailyTarget} onChange={(e)=>dset("dailyTarget", e.target.value)} />
                           </div>
-                          <div className={["col-span-12", gym ? "md:col-span-4" : "md:col-span-6", "transition-all duration-300"].join(" ")}>
-                            <Label>{gym ? "Number of reps (per set)" : "Preferred set size"}</Label>
-                            <Input className={inputClass} type="number" value={draft.defaultSetSize} onChange={(e)=>dset("defaultSetSize", e.target.value)} />
-                          </div>
-                          <div className={["col-span-12 transition-all duration-300", gym ? "md:col-span-4 opacity-100" : "md:col-span-0 opacity-0 pointer-events-none h-0 overflow-hidden"].join(" ")}>
-                            {gym && (
-                              <>
-                                <Label>Target weight (kg)</Label>
-                                <Input className={inputClass} type="number" value={draft.weight} onChange={(e)=>dset("weight", e.target.value)} />
-                              </>
-                            )}
+                          <div className={["col-span-12", "md:col-span-6", "transition-all duration-300"].join(" ")}>
+                            <SmallLabel>{gym ? "Number of reps (per set)" : "Preferred set size"}</SmallLabel>
+                            <NumericInput className={inputClass} value={draft.defaultSetSize} onChange={(e)=>dset("defaultSetSize", e.target.value)} />
                           </div>
                         </div>
 
+                        {gym && (
+                          <div className="rounded-xl border border-border p-3 mt-2 space-y-3">
+                            <SmallLabel>Weight pattern</SmallLabel>
+
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Segmented
+                                value={draft.weightPattern?.mode || "fixed"}
+                                onChange={(mode) => {
+                                  if (mode !== "fixed") dset("weight", "");
+                                  dset("weightPattern", { ...(draft.weightPattern || {}), mode, _stepManual:false });
+                                }}
+                                options={[
+                                  { value: "fixed", label: "Fixed" },
+                                  { value: "drop",  label: "Drop"  },
+                                  { value: "ramp",  label: "Ramp"  },
+                                  { value: "custom",label: "Custom"},
+                                ]}
+                              />
+                              <div className="small text-muted-foreground">
+                                Fixed = same weight per set; Drop = high→low; Ramp = low→high; Custom = list per set.
+                              </div>
+                            </div>
+
+                            {/* FIXED */}
+                            {(draft.weightPattern?.mode || "fixed") === "fixed" && (
+                              <div>
+                                <SmallLabel>Target weight (kg)</SmallLabel>
+                                <NumericInput
+                                  className={inputClass}
+                                  placeholder="e.g., 40"
+                                  value={draft.weight}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    dset("weight", v);
+                                    dset("weightPattern", { ...(draft.weightPattern || {}), start: v, end: v, step: "", perSet: "", _stepManual:false });
+                                  }}
+                                />
+                              </div>
+                            )}
+
+                            {/* DROP / RAMP */}
+                            {["drop","ramp"].includes(draft.weightPattern?.mode || "") && (
+                              <div className="grid grid-cols-12 gap-3 items-end">
+                                <div className="col-span-12 sm:col-span-4">
+                                  <SmallLabel>Start (kg)</SmallLabel>
+                                  <NumericInput
+                                    className={inputClass}
+                                    value={draft.weightPattern?.start ?? ""}
+                                    onChange={(e)=>dset("weightPattern", { ...(draft.weightPattern||{}), start: e.target.value })}
+                                  />
+                                </div>
+                                <div className="col-span-12 sm:col-span-4">
+                                  <SmallLabel>End (kg)</SmallLabel>
+                                  <NumericInput
+                                    className={inputClass}
+                                    value={draft.weightPattern?.end ?? ""}
+                                    onChange={(e)=>dset("weightPattern", { ...(draft.weightPattern||{}), end: e.target.value })}
+                                  />
+                                </div>
+                                <div className="col-span-12 sm:col-span-4">
+                                  <SmallLabel>Step (kg)</SmallLabel>
+                                  <div className="flex items-center gap-2">
+                                    <NumericInput
+                                      className={inputClass + " flex-1"}
+                                      value={draft.weightPattern?.step ?? ""}
+                                      onChange={(e)=>{
+                                        const v = e.target.value;
+                                        const manual = v !== "";
+                                        dset("weightPattern", { ...(draft.weightPattern||{}), step: v, _stepManual: manual });
+                                      }}
+                                    />
+                                    {/* <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={()=>{
+                                        const start = draft.weightPattern?.start ?? draft.weight;
+                                        const end = draft.weightPattern?.end ?? draft.weight;
+                                        const next = autoStepFor(draft.dailyTarget, start, end);
+                                        dset("weightPattern", { ...(draft.weightPattern||{}), step: next, _stepManual: false });
+                                      }}
+                                    >
+                                      Auto
+                                    </Button> */}
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* CUSTOM */}
+                            {(draft.weightPattern?.mode || "") === "custom" && (
+                              <div>
+                                <SmallLabel>Per set (comma separated)</SmallLabel>
+                                <Input
+                                  className={inputClass}
+                                  inputMode="numeric"
+                                  pattern="[0-9,.\s]*"
+                                  placeholder="e.g., 60, 55, 50, 45"
+                                  value={draft.weightPattern?.perSet ?? ""}
+                                  onChange={(e)=>{
+                                    const v = e.target.value.replace(/[^0-9,.\s]/g, "");
+                                    dset("weightPattern", { ...(draft.weightPattern || {}), perSet: v });
+                                  }}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        )}
+
                         {/* Schedule row (edit) */}
                         <div>
-                          <Label>Schedule</Label>
+                          <SmallLabel>Schedule</SmallLabel>
                           <div className="grid grid-cols-12 gap-4 items-end mt-1.5">
                             <div className="col-span-12 md:col-span-6 min-w-0">
                               <DayPills
@@ -486,7 +702,7 @@ export default function Templates() {
 
                             {gym && (
                               <div className="col-span-12 md:col-span-2 min-w-0">
-                                <Label>Basis</Label>
+                                <SmallLabel>Basis</SmallLabel>
                                 <Segmented
                                   value={draft.progMode}
                                   onChange={(m)=>dset("progMode", m)}
@@ -499,7 +715,7 @@ export default function Templates() {
                             )}
 
                             <div className={["col-span-6", gym ? "md:col-span-2" : "md:col-span-3", "min-w-0"].join(" ")}>
-                              <Label>Progression</Label>
+                              <SmallLabel>Progression</SmallLabel>
                               <Segmented
                                 value={draft.showProg ? "on" : "off"}
                                 onChange={(v)=>dset("showProg", v === "on")}
@@ -511,7 +727,7 @@ export default function Templates() {
                             </div>
 
                             <div className={["col-span-6", gym ? "md:col-span-2" : "md:col-span-3", "min-w-0"].join(" ")}>
-                              <Label>Deload</Label>
+                              <SmallLabel>Deload</SmallLabel>
                               <Segmented
                                 value={draft.showDeload ? "on" : "off"}
                                 onChange={(v)=>dset("showDeload", v === "on")}
@@ -527,12 +743,12 @@ export default function Templates() {
                         {draft.showProg && (
                           <div className="grid grid-cols-12 gap-4 items-end">
                             <div className="col-span-12 md:col-span-6">
-                              <Label>Progression weekly %</Label>
-                              <Input className={inputClass} type="number" value={draft.weeklyPct} onChange={(e)=>dset("weeklyPct", e.target.value)} />
+                              <SmallLabel>Progression weekly %</SmallLabel>
+                              <NumericInput className={inputClass} value={draft.weeklyPct} onChange={(e)=>dset("weeklyPct", e.target.value)} />
                             </div>
                             <div className="col-span-12 md:col-span-6">
-                              <Label>Progression cap</Label>
-                              <Input className={inputClass} placeholder="e.g., 300" value={draft.cap} onChange={(e)=>dset("cap", e.target.value)} />
+                              <SmallLabel>Progression cap</SmallLabel>
+                              <NumericInput className={inputClass} placeholder="e.g., 300" value={draft.cap} onChange={(e)=>dset("cap", e.target.value)} />
                             </div>
                           </div>
                         )}
@@ -540,12 +756,12 @@ export default function Templates() {
                         {draft.showDeload && (
                           <div className="grid grid-cols-12 gap-4 items-end">
                             <div className="col-span-12 md:col-span-6">
-                              <Label>Deload every N weeks</Label>
-                              <Input className={inputClass} type="number" value={draft.deloadEvery} onChange={(e)=>dset("deloadEvery", e.target.value)} />
+                              <SmallLabel>Deload every N weeks</SmallLabel>
+                              <NumericInput className={inputClass} value={draft.deloadEvery} onChange={(e)=>dset("deloadEvery", e.target.value)} />
                             </div>
                             <div className="col-span-12 md:col-span-6">
-                              <Label>Deload scale</Label>
-                              <Input className={inputClass} type="number" step="0.05" value={draft.deloadScale} onChange={(e)=>dset("deloadScale", e.target.value)} />
+                              <SmallLabel>Deload scale</SmallLabel>
+                              <NumericInput className={inputClass} value={draft.deloadScale} onChange={(e)=>dset("deloadScale", e.target.value)} />
                             </div>
                           </div>
                         )}
@@ -576,13 +792,13 @@ export default function Templates() {
           </div>
 
           <div className="col-span-12 sm:col-span-4 md:col-span-3">
-            <div className="small text-muted-foreground h-5">Type</div>
+            <SmallLabel>Type</SmallLabel>
             <Segmented
               className="text-base"
               value={form.kind}
               onChange={(k) => {
                 if (k === "gym") {
-                  setForm((p) => ({ ...p, kind: "gym", dailyTarget: 5 }));
+                  setForm(p => ({ ...p, kind: "gym", dailyTarget: 5, weightPattern: { mode: "fixed", start: p.weight || "", end: p.weight || "", step: "", perSet: "", _stepManual:false } }));
                 } else {
                   setForm((p) => ({ ...p, kind: "calisthenics", dailyTarget: 200 }));
                 }
@@ -595,7 +811,7 @@ export default function Templates() {
           </div>
 
           <div className="col-span-12 sm:col-span-5 md:col-span-6">
-            <div className="small text-muted-foreground h-5">Group (type to create or pick)</div>
+            <SmallLabel>Group (type to create or pick)</SmallLabel>
             <GroupCombo
               options={groupOptions}
               value={form.group}
@@ -609,37 +825,132 @@ export default function Templates() {
         {/* Create form body */}
         <div className="space-y-6 mt-6">
           <div>
-            <div className="small text-muted-foreground h-5">Name (e.g., Pull-ups / Bench Press)</div>
+            <SmallLabel>Name (e.g., Pull-ups / Bench Press)</SmallLabel>
             <Input className={inputClass} value={form.name} onChange={(e)=>upd("name", e.target.value)} />
           </div>
 
           <div className="grid grid-cols-12 gap-4 items-end">
-            <div className={["col-span-12", isGym ? "md:col-span-4" : "md:col-span-6", "transition-all duration-300"].join(" ")}>
-              <div className="small text-muted-foreground h-5">
-                {isGym ? "Number of sets" : "Daily target"}
-              </div>
-              <Input className={inputClass} type="number" value={form.dailyTarget} onChange={(e)=>upd("dailyTarget", e.target.value)} />
+            <div className={["col-span-12", "md:col-span-6", "transition-all duration-300"].join(" ")}>
+              <SmallLabel>{isGym ? "Number of sets" : "Daily target"}</SmallLabel>
+              <NumericInput className={inputClass} value={form.dailyTarget} onChange={(e)=>upd("dailyTarget", e.target.value)} />
             </div>
 
-            <div className={["col-span-12", isGym ? "md:col-span-4" : "md:col-span-6", "transition-all duration-300"].join(" ")}>
-              <div className="small text-muted-foreground h-5">
-                {isGym ? "Number of reps (per set)" : "Preferred rep size"}
-              </div>
-              <Input className={inputClass} type="number" value={form.defaultSetSize} onChange={(e)=>upd("defaultSetSize", e.target.value)} />
-            </div>
-
-            <div className={["col-span-12 transition-all duration-300", isGym ? "md:col-span-4 opacity-100" : "md:col-span-0 opacity-0 pointer-events-none h-0 overflow-hidden"].join(" ")}>
-              {isGym && (
-                <>
-                  <div className="small text-muted-foreground h-5">Target weight (kg)</div>
-                  <Input className={inputClass} type="number" placeholder="e.g., 40" value={form.weight} onChange={(e)=>upd("weight", e.target.value)} />
-                </>
-              )}
+            <div className={["col-span-12", "md:col-span-6", "transition-all duration-300"].join(" ")}>
+              <SmallLabel>{isGym ? "Number of reps (per set)" : "Preferred rep size"}</SmallLabel>
+              <NumericInput className={inputClass} value={form.defaultSetSize} onChange={(e)=>upd("defaultSetSize", e.target.value)} />
             </div>
           </div>
 
+          {isGym && (
+            <div className="rounded-xl border border-border p-3 mt-2 space-y-3">
+              <SmallLabel>Weight pattern</SmallLabel>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Segmented
+                  value={form.weightPattern?.mode || "fixed"}
+                  onChange={(mode) => {
+                    if (mode !== "fixed") upd("weight", "");
+                    upd("weightPattern", { ...(form.weightPattern || {}), mode, _stepManual:false });
+                  }}
+                  options={[
+                    { value: "fixed", label: "Fixed" },
+                    { value: "drop",  label: "Drop"  },
+                    { value: "ramp",  label: "Ramp"  },
+                    { value: "custom",label: "Custom"},
+                  ]}
+                />
+                <div className="small text-muted-foreground">
+                  Fixed = same weight per set; Drop = high→low; Ramp = low→high; Custom = list per set.
+                </div>
+              </div>
+
+              {/* FIXED */}
+              {(form.weightPattern?.mode || "fixed") === "fixed" && (
+                <div>
+                  <SmallLabel>Target weight (kg)</SmallLabel>
+                  <NumericInput
+                    className={inputClass}
+                    placeholder="e.g., 40"
+                    value={form.weight}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      upd("weight", v);
+                      upd("weightPattern", { ...(form.weightPattern || {}), start: v, end: v, step: "", perSet: "", _stepManual:false });
+                    }}
+                  />
+                </div>
+              )}
+
+              {/* DROP / RAMP */}
+              {["drop","ramp"].includes(form.weightPattern?.mode || "") && (
+                <div className="grid grid-cols-12 gap-3 items-end">
+                  <div className="col-span-12 sm:col-span-4">
+                    <SmallLabel>Start (kg)</SmallLabel>
+                    <NumericInput
+                      className={inputClass}
+                      value={form.weightPattern?.start ?? ""}
+                      onChange={(e)=>upd("weightPattern", { ...(form.weightPattern||{}), start: e.target.value })}
+                    />
+                  </div>
+                  <div className="col-span-12 sm:col-span-4">
+                    <SmallLabel>End (kg)</SmallLabel>
+                    <NumericInput
+                      className={inputClass}
+                      value={form.weightPattern?.end ?? ""}
+                      onChange={(e)=>upd("weightPattern", { ...(form.weightPattern||{}), end: e.target.value })}
+                    />
+                  </div>
+                  <div className="col-span-12 sm:col-span-4">
+                    <SmallLabel>Step (kg)</SmallLabel>
+                    <div className="flex items-center gap-2">
+                      <NumericInput
+                        className={inputClass + " flex-1"}
+                        value={form.weightPattern?.step ?? ""}
+                        onChange={(e)=>{
+                          const v = e.target.value;
+                          const manual = v !== "";
+                          upd("weightPattern", { ...(form.weightPattern||{}), step: v, _stepManual: manual });
+                        }}
+                      />
+                      {/* <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={()=>{
+                          const start = form.weightPattern?.start ?? form.weight;
+                          const end = form.weightPattern?.end ?? form.weight;
+                          const next = autoStepFor(form.dailyTarget, start, end);
+                          upd("weightPattern", { ...(form.weightPattern||{}), step: next, _stepManual: false });
+                        }}
+                      >
+                        Auto
+                      </Button> */}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* CUSTOM */}
+              {(form.weightPattern?.mode || "") === "custom" && (
+                <div>
+                  <SmallLabel>Per set (comma separated)</SmallLabel>
+                  <Input
+                    className={inputClass}
+                    inputMode="numeric"
+                    pattern="[0-9,.\s]*"
+                    placeholder="e.g., 60, 55, 50, 45"
+                    value={form.weightPattern?.perSet ?? ""}
+                    onChange={(e)=>{
+                      const v = e.target.value.replace(/[^0-9,.\s]/g, "");
+                      upd("weightPattern", { ...(form.weightPattern || {}), perSet: v });
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
           <div>
-            <div className="small text-muted-foreground h-5">Schedule</div>
+            <SmallLabel>Schedule</SmallLabel>
             <div className="grid grid-cols-12 gap-4 items-end">
               <div className="col-span-12 md:col-span-6 min-w-0">
                 <DayPills
@@ -653,7 +964,7 @@ export default function Templates() {
 
               {isGym && (
                 <div className="col-span-12 md:col-span-2 min-w-0">
-                  <div className="small text-muted-foreground h-5">Basis</div>
+                  <SmallLabel>Basis</SmallLabel>
                   <Segmented
                     value={form.progMode}
                     onChange={(m)=>upd("progMode", m)}
@@ -666,7 +977,7 @@ export default function Templates() {
               )}
 
               <div className={["col-span-6", isGym ? "md:col-span-2" : "md:col-span-3", "min-w-0"].join(" ")}>
-                <div className="small text-muted-foreground h-5">Progression</div>
+                <SmallLabel>Progression</SmallLabel>
                 <Segmented
                   value={form.showProg ? "on" : "off"}
                   onChange={(v)=>upd("showProg", v === "on")}
@@ -678,7 +989,7 @@ export default function Templates() {
               </div>
 
               <div className={["col-span-6", isGym ? "md:col-span-2" : "md:col-span-3", "min-w-0"].join(" ")}>
-                <div className="small text-muted-foreground h-5">Deload</div>
+                <SmallLabel>Deload</SmallLabel>
                 <Segmented
                   value={form.showDeload ? "on" : "off"}
                   onChange={(v)=>upd("showDeload", v === "on")}
@@ -691,47 +1002,6 @@ export default function Templates() {
             </div>
           </div>
 
-          {form.showProg && (
-            <div className="grid grid-cols-12 gap-4 items-end">
-              <div className="col-span-12 md:col-span-6">
-                <div className="small text-muted-foreground h-5">Progression weekly % (0 disables)</div>
-                <Input className={inputClass} type="number" value={form.weeklyPct} onChange={(e)=>upd("weeklyPct", e.target.value)} />
-              </div>
-              <div className="col-span-12 md:col-span-6">
-                <div className="small text-muted-foreground h-5">Progression cap (optional)</div>
-                <Input className={inputClass} placeholder="e.g., 300" value={form.cap} onChange={(e)=>upd("cap", e.target.value)} />
-              </div>
-            </div>
-          )}
-
-          {form.showDeload && (
-            <div className="grid grid-cols-12 gap-4 items-end">
-              <div className="col-span-12 md:col-span-6">
-                <div className="small text-muted-foreground h-5">Deload every N weeks (0 disables)</div>
-                <Input className={inputClass} type="number" value={form.deloadEvery} onChange={(e)=>upd("deloadEvery", e.target.value)} />
-              </div>
-              <div className="col-span-12 md:col-span-6">
-                <div className="small text-muted-foreground h-5">Deload scale (e.g., 0.7 = 70%)</div>
-                <Input className={inputClass} type="number" step="0.05" value={form.deloadScale} onChange={(e)=>upd("deloadScale", e.target.value)} />
-              </div>
-            </div>
-          )}
-
-          <div className="grid grid-cols-12 gap-4 items-end">
-            <div className="col-span-12 md:col-span-6">
-              <div className="small text-muted-foreground h-5">Start date</div>
-              <DatePicker
-                value={form.startDate || todayLocalISO()}
-                onChange={(v)=>upd("startDate", v || todayLocalISO())}
-              />
-            </div>
-            <div className="col-span-12 md:col-span-6">
-              <div className="small text-muted-foreground h-5">End date (optional)</div>
-              <DatePicker value={form.endDate} onChange={(v)=>upd("endDate", v)} />
-            </div>
-          </div>
-
-          {/* Not sticky anymore — scrolls with the card */}
           <div className="pt-1">
             <Button className="w-full h-11" onClick={create}>Create template</Button>
           </div>

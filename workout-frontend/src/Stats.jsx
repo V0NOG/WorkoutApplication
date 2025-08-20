@@ -1,3 +1,4 @@
+// src/Stats.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
 import dayjs from "dayjs";
@@ -75,15 +76,15 @@ function LineChart({ data, height = 220 }) {
   );
 }
 
-/* ---------- Your existing components ---------- */
+/* ---------- Simple bars & formatting ---------- */
 
-function Bar({ label, value, max }) {
+function Bar({ label, value, max, valueSuffix = "" }) {
   const pct = Math.min(100, Math.round((value / Math.max(1, max)) * 100));
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between small text-muted-foreground">
         <span>{label}</span>
-        <span>{value}</span>
+        <span>{value}{valueSuffix}</span>
       </div>
       <div className="h-2 rounded-full bg-[var(--secondary)] border border-border overflow-hidden">
         <div className="h-full bg-gradient-to-r from-blue-500 to-blue-300" style={{ width: `${pct}%` }} />
@@ -98,8 +99,9 @@ const EMPTY = {
   compliancePct: 0,
   currentStreak: 0,
   longestStreak: 0,
-  totals: { done: 0, target: 0 },
+  totals: { done: 0, target: 0, volumeKg: 0 },
   weeks: [],
+  days: [],
 };
 
 export default function Stats() {
@@ -210,10 +212,19 @@ export default function Stats() {
     [weightSeries]
   );
 
+  // NEW: weekly volume bars + top volume days
+  const weekVolumes = useMemo(() => (data?.weeks || []).map(w => ({ ...w, volumeKg: Number(w?.volumeKg || 0) })), [data]);
+  const maxWeekVolume = Math.max(1, ...weekVolumes.map(w => w.volumeKg));
+  const topVolumeDays = useMemo(() => {
+    const days = (data?.days || []).filter(d => Number(d?.volumeKg) > 0);
+    days.sort((a,b) => Number(b.volumeKg) - Number(a.volumeKg));
+    return days.slice(0, 5);
+  }, [data]);
+
   return (
     <div className="stack">
       {/* KPIs */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="card p-5">
           <div className="small text-muted-foreground">Compliance</div>
           <div className="text-3xl font-bold">{loading ? "…" : `${data?.compliancePct ?? 0}%`}</div>
@@ -225,6 +236,12 @@ export default function Stats() {
         <div className="card p-5">
           <div className="small text-muted-foreground">Longest streak</div>
           <div className="text-3xl font-bold">{loading ? "…" : `${data?.longestStreak ?? 0} days`}</div>
+        </div>
+        <div className="card p-5">
+          <div className="small text-muted-foreground">Training volume</div>
+          <div className="text-3xl font-bold">
+            {loading ? "…" : `${Math.round(Number(data?.totals?.volumeKg || 0))} kg`}
+          </div>
         </div>
       </div>
 
@@ -240,9 +257,9 @@ export default function Stats() {
         )}
       </div>
 
-      {/* Weekly breakdown */}
+      {/* Weekly breakdown (reps) */}
       <div className="card p-5 space-y-4">
-        <div className="font-semibold">Weekly totals</div>
+        <div className="font-semibold">Weekly totals (reps)</div>
         {loading ? (
           <div className="opacity-60">Loading…</div>
         ) : (
@@ -269,6 +286,42 @@ export default function Stats() {
           </div>
         )}
       </div>
+
+      {/* NEW: Weekly training volume (kg) */}
+      {weekVolumes.length > 0 && (
+        <div className="card p-5 space-y-3">
+          <div className="font-semibold">Weekly training volume (kg)</div>
+          <div className="grid gap-3">
+            {weekVolumes.map((w, i) => (
+              <Bar
+                key={i}
+                label={`${w.from} → ${w.to}`}
+                value={Math.round(w.volumeKg)}
+                max={Math.round(maxWeekVolume)}
+                valueSuffix=" kg"
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* NEW: Top volume days */}
+      {topVolumeDays.length > 0 && (
+        <div className="card p-5">
+          <div className="font-semibold mb-3">Top volume days</div>
+          <div className="space-y-2">
+            {topVolumeDays.map((d) => (
+              <div
+                key={d.date}
+                className="flex items-center justify-between rounded-xl border border-border px-3 py-2 bg-background"
+              >
+                <div className="small text-muted-foreground">{dayjs(d.date).format("ddd, MMM D")}</div>
+                <div className="font-medium">{Math.round(Number(d.volumeKg || 0))} kg</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ---- NEW: Actual weight trend (only shows if there is data) ---- */}
       {weightSeriesWithData.length > 0 && (
