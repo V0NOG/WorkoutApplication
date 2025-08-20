@@ -321,14 +321,14 @@ export default function Templates() {
         <div className="grid grid-cols-12 gap-4 items-end">
           <div className={["col-span-12", isGym ? "md:col-span-4" : "md:col-span-6", "transition-all duration-300"].join(" ")}>
             <div className="small text-muted-foreground h-5">
-              {isGym ? "Number of sets (per day)" : "Daily target"}
+              {isGym ? "Number of sets" : "Daily target"}
             </div>
             <Input className={inputClass} type="number" value={form.dailyTarget} onChange={(e)=>upd("dailyTarget", e.target.value)} />
           </div>
 
           <div className={["col-span-12", isGym ? "md:col-span-4" : "md:col-span-6", "transition-all duration-300"].join(" ")}>
             <div className="small text-muted-foreground h-5">
-              {isGym ? "Number of reps (per set)" : "Preferred set size"}
+              {isGym ? "Number of reps (per set)" : "Preferred rep size"}
             </div>
             <Input className={inputClass} type="number" value={form.defaultSetSize} onChange={(e)=>upd("defaultSetSize", e.target.value)} />
           </div>
