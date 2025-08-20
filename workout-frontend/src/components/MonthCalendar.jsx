@@ -73,12 +73,18 @@ export default function MonthCalendar({
           {startOfMonth.format("MMMM YYYY")}
         </div>
         <div className="flex gap-1 sm:gap-2">
-          <button type="button" onClick={onPrev}
-            className="px-2.5 py-1.5 rounded-lg border border-border hover:bg-muted outline-none min-w-[40px] sm:min-w-[44px]">
+          <button
+            type="button"
+            onClick={onPrev}
+            className="px-2.5 py-1.5 rounded-lg border border-border hover:bg-muted outline-none min-w-[40px] sm:min-w-[44px]"
+          >
             ‹
           </button>
-          <button type="button" onClick={onNext}
-            className="px-2.5 py-1.5 rounded-lg border border-border hover:bg-muted outline-none min-w-[40px] sm:min-w-[44px]">
+          <button
+            type="button"
+            onClick={onNext}
+            className="px-2.5 py-1.5 rounded-lg border border-border hover:bg-muted outline-none min-w-[40px] sm:min-w-[44px]"
+          >
             ›
           </button>
         </div>
@@ -86,8 +92,12 @@ export default function MonthCalendar({
 
       {/* Weekday headers */}
       <div className="grid grid-cols-7 gap-1 sm:gap-1.5 md:gap-2 mb-1.5 sm:mb-2 small text-muted-foreground">
-      {DOW.map((d) => <div key={d} className="text-center text-[11px] sm:text-xs">{d}</div>)}
-    </div>
+        {DOW.map((d) => (
+          <div key={d} className="text-center text-[11px] sm:text-xs">
+            {d}
+          </div>
+        ))}
+      </div>
 
       {/* Grid */}
       <div className="grid grid-cols-7 gap-1 sm:gap-1.5 md:gap-2 overflow-hidden">
@@ -96,10 +106,9 @@ export default function MonthCalendar({
           const isToday = dateStr === todayStr;
           const isSelected = selectedDate === dateStr;
 
-          // Do NOT gate by inMonth so weekends/edges still show
+          // IMPORTANT: don’t gate by inMonth so weekends/edges always get groups
           const groups = Array.isArray(groupsByDate[dateStr]) ? groupsByDate[dateStr] : [];
 
-          // tooltip
           const title = groups.length ? `${dateStr}: ${groups.join(", ")}` : dateStr;
 
           return (
@@ -109,9 +118,9 @@ export default function MonthCalendar({
               onClick={() => onSelect?.(dateStr)}
               className={[
                 "relative w-full rounded-xl border transition-colors outline-none focus:outline-none",
-                // Mobile: square, tighter; sm+: taller cells
+                // Mobile: square; sm+: taller cells
                 "aspect-square sm:aspect-[5/4]",
-                // Remove mobile min-height; use smaller min-heights on sm+
+                // Min-heights for sm+ so pills don’t clip
                 "sm:min-h-[84px] md:min-h-[96px]",
                 colorFor(dateStr, inMonth),
                 inMonth ? "hover:bg-muted" : "",
@@ -136,7 +145,7 @@ export default function MonthCalendar({
 
                 {/* Groups */}
                 <div className="mt-0.5 sm:mt-1 flex-1 overflow-hidden">
-                  {/* Mobile: tiny dot row; sm+: your pill list */}
+                  {/* Mobile: tiny color dots */}
                   <div className="sm:hidden flex items-center gap-1 overflow-hidden">
                     {groups.slice(0, 3).map((g, i) => {
                       const hue = hueFromString(g);
@@ -151,15 +160,13 @@ export default function MonthCalendar({
                     {groups.length > 3 && (
                       <span className="text-[10px] text-muted-foreground">+{groups.length - 3}</span>
                     )}
-                    {groups.length === 0 && <span className="text-[10px] text-muted-foreground/70">—</span>}
+                    {groups.length === 0 && (
+                      <span className="text-[10px] text-muted-foreground/70">—</span>
+                    )}
                   </div>
 
-                  <div
-                    className={[
-                      "hidden sm:flex flex-col gap-1",
-                      "max-h-full overflow-y-auto pr-0.5",
-                    ].join(" ")}
-                  >
+                  {/* Tablet/Desktop: full pill list */}
+                  <div className="hidden sm:flex flex-col gap-1 max-h-full overflow-y-auto pr-0.5">
                     {groups.length > 0 ? (
                       groups.map((g, i) => <GroupPill key={`${dateStr}-${i}`} name={g} />)
                     ) : (

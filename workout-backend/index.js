@@ -26,7 +26,6 @@ async function connectMongo() {
     }
     const masked = process.env.MONGODB_URI.replace(/\/\/([^:]+):([^@]+)@/, '//$1:<redacted>@');
     console.log('Connecting to MongoDB:', masked);
-
     await mongoose.connect(process.env.MONGODB_URI);
     console.log('✅ MongoDB connected');
   } catch (err) {
@@ -56,7 +55,19 @@ const TaskTemplateSchema = new mongoose.Schema({
   unit: { type: String, default: 'reps' },          // reps | minutes | distance
   dailyTarget: Number,
   defaultSetSize: Number,
-  weight: { type: Number, default: null },          // 👈 target weight for GYM
+
+  // Legacy fixed weight (kept for compatibility when weightPattern.mode === "fixed")
+  weight: { type: Number, default: null },
+
+  // Per-set weight pattern
+  weightPattern: {
+    mode: { type: String, enum: ['fixed','drop','ramp','custom'], default: 'fixed' },
+    start: { type: Number, default: null },   // for drop/ramp (or fixed)
+    end:   { type: Number, default: null },   // for drop/ramp
+    step:  { type: Number, default: null },   // optional step kg per set (otherwise interpolate)
+    perSet: { type: [Number], default: [] }   // for custom, array of weights per set index
+  },
+
   schedule: {
     type: { type: String, default: 'weekly' },
     daysOfWeek: [Number],                           // 0..6 (Sun..Sat)
@@ -83,14 +94,19 @@ const DailyInstanceSchema = new mongoose.Schema({
   userId: { type: mongoose.Types.ObjectId, ref: 'User' },
   templateId: { type: mongoose.Types.ObjectId, ref: 'TaskTemplate' },
   date: String,                       // 'YYYY-MM-DD'
-  target: Number,
-  setsPlanned: [Number],
-  setsDone: [Number],
+  target: Number,                     // target in reps (gym) or unit
+  setsPlanned: [Number],              // reps per set (gym) OR chunked reps (cali)
+  setsDone: [Number],                 // reps added per action/set
+
+  // Weights
+  weightsPlanned: [Number],           // planned kg per set (Gym only)
+  weightsDone: [Number],              // actual kg per completed set, aligned to setsDone
+
   repsDone: { type: Number, default: 0 },
   status: { type: String, default: 'on-track' }, // on-track|ahead|behind|done
   notes: String,
   rpe: Number,
-  weight: { type: Number, default: null },       // 👈 user's actual weight for the day
+  weight: { type: Number, default: null },       // legacy “day weight” still supported
   group: { type: String, default: '' }           // snapshot of template.group
 }, { timestamps: true });
 
@@ -102,11 +118,9 @@ const DailyMetricSchema = new mongoose.Schema({
   weightKg: { type: Number, default: null },
   heightCm: { type: Number, default: null },
 }, { timestamps: true });
-
 DailyMetricSchema.index({ userId: 1, date: 1 }, { unique: true });
 
 const DailyMetric = mongoose.model('DailyMetric', DailyMetricSchema);
-
 const User = mongoose.model('User', UserSchema);
 const TaskTemplate = mongoose.model('TaskTemplate', TaskTemplateSchema);
 const DailyInstance = mongoose.model('DailyInstance', DailyInstanceSchema);
@@ -149,6 +163,56 @@ function planSets(target, setSize) {
     remain -= size;
   }
   return sets;
+}
+
+// Build planned weights per set for a template and set count
+function buildWeightsForSets(tpl, setsCount) {
+  if (tpl.kind !== 'gym' || setsCount <= 0) return [];
+  const mode = tpl.weightPattern?.mode || 'fixed';
+
+  // Back-compat: if legacy tpl.weight exists and no pattern, treat as fixed.
+  if (mode === 'fixed') {
+    const w = (tpl.weightPattern?.start ?? tpl.weight ?? null);
+    if (w == null) return [];
+    return Array.from({ length: setsCount }, () => Number(w));
+  }
+
+  if (mode === 'custom') {
+    const arr = Array.isArray(tpl.weightPattern?.perSet) ? tpl.weightPattern.perSet : [];
+    if (!arr.length) return [];
+    // Pad/trim to setsCount
+    const out = arr.slice(0, setsCount).map(n => Number(n));
+    while (out.length < setsCount) out.push(out[out.length - 1] ?? 0);
+    return out;
+  }
+
+  // drop (high→low) or ramp (low→high)
+  const start = Number(tpl.weightPattern?.start ?? tpl.weight ?? NaN);
+  const end   = Number(tpl.weightPattern?.end   ?? tpl.weight ?? NaN);
+  const step  = (Number.isFinite(tpl.weightPattern?.step) ? Number(tpl.weightPattern.step) : null);
+
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return [];
+
+  const out = [];
+  if (step && step !== 0) {
+    // Step-based sequence towards end, constrained to setsCount
+    let cur = start;
+    for (let i = 0; i < setsCount; i++) {
+      out.push(cur);
+      if ((mode === 'drop' && cur > end) || (mode === 'ramp' && cur < end)) {
+        cur = (mode === 'drop') ? Math.max(end, cur - Math.abs(step))
+                                : Math.min(end, cur + Math.abs(step));
+      }
+    }
+  } else {
+    // Linear interpolation inclusive start→end across sets
+    const n = Math.max(1, setsCount - 1);
+    for (let i = 0; i < setsCount; i++) {
+      const t = i / n;
+      out.push(start + (end - start) * t);
+    }
+  }
+  return out.map(Number);
 }
 
 function computeStatus(repsDone, target) {
@@ -202,6 +266,38 @@ function arraysEqual(a = [], b = []) {
   return true;
 }
 
+// --- Weight pattern normalization (for create & update) ---
+function normalizeWeightPattern(kind, wpInput, legacyWeight) {
+  if (kind !== 'gym') return undefined;
+
+  const safeMode = (m) => (['fixed','drop','ramp','custom'].includes(m) ? m : 'fixed');
+  const toNum = (v) => (v === '' || v == null ? null : Number(v));
+  const toArrNum = (v) => {
+    if (Array.isArray(v)) return v.map(Number).filter(n => Number.isFinite(n));
+    if (typeof v === 'string') {
+      return v.split(',').map(s => s.trim()).filter(Boolean).map(Number).filter(n => Number.isFinite(n));
+    }
+    return [];
+  };
+
+  const mode = safeMode(wpInput?.mode || 'fixed');
+
+  if (mode === 'custom') {
+    return { mode, start: null, end: null, step: null, perSet: toArrNum(wpInput?.perSet) };
+  }
+
+  const start = toNum(wpInput?.start ?? legacyWeight);
+  const end   = toNum(wpInput?.end   ?? legacyWeight);
+  const step  = toNum(wpInput?.step);
+
+  if (mode === 'fixed') {
+    const s = start;
+    return { mode, start: s, end: s, step: null, perSet: [] };
+  }
+  // drop / ramp
+  return { mode, start, end, step: (step === 0 ? null : step), perSet: [] };
+}
+
 // Materialize/repair the plan for a date
 async function materializeForDate(userId, date) {
   const templates = await TaskTemplate.find({ userId, active: true }).lean();
@@ -231,28 +327,37 @@ async function materializeForDate(userId, date) {
     if (!tpl) continue;
 
     const base = computeTargetWithRules(tpl, date);
-    let newTarget, newSets;
+    let newTarget, newSets, newWeights;
     if (tpl.kind === 'gym') {
       const repsPerSet = Math.max(1, Number(tpl.defaultSetSize) || 1);
       const setsCount  = Math.max(1, Math.round(base));       // base = #sets (after prog/deload)
-      newTarget = setsCount * repsPerSet;                      // target in REPS for Gym
-      newSets   = Array.from({ length: setsCount }, () => repsPerSet); // exact #sets × reps
+      newTarget        = setsCount * repsPerSet;              // target in REPS for Gym
+      newSets          = Array.from({ length: setsCount }, () => repsPerSet);
+      newWeights       = buildWeightsForSets(tpl, setsCount);
     } else {
       newTarget = Math.max(1, Math.round(base));               // calisthenics/etc: base is reps/mins/etc
       const setSize = Math.max(1, Number(tpl.defaultSetSize) || newTarget);
       newSets   = planSets(newTarget, setSize);
+      newWeights = [];
     }
     const newGroup = tpl.group || '';
 
     const needsUpdate =
       di.target !== newTarget ||
       !arraysEqual(di.setsPlanned, newSets) ||
+      !arraysEqual(di.weightsPlanned || [], newWeights || []) ||
       (di.group || '') !== newGroup;
 
     if (needsUpdate) {
       await DailyInstance.updateOne(
         { _id: di._id },
-        { $set: { target: newTarget, setsPlanned: newSets, group: newGroup, status: computeStatus(di.repsDone || 0, newTarget) } }
+        { $set: {
+            target: newTarget,
+            setsPlanned: newSets,
+            weightsPlanned: newWeights || [],
+            group: newGroup,
+            status: computeStatus(di.repsDone || 0, newTarget)
+        } }
       );
     }
   }
@@ -262,16 +367,18 @@ async function materializeForDate(userId, date) {
     if (!isActiveOnDate(tpl, date)) continue;
 
     const base = computeTargetWithRules(tpl, date);
-    let newTarget, newSets;
+    let newTarget, newSets, newWeights;
     if (tpl.kind === 'gym') {
       const repsPerSet = Math.max(1, Number(tpl.defaultSetSize) || 1);
       const setsCount  = Math.max(1, Math.round(base));       // base = #sets (after prog/deload)
-      newTarget = setsCount * repsPerSet;                      // target in REPS for Gym
-      newSets   = Array.from({ length: setsCount }, () => repsPerSet); // exact #sets × reps
+      newTarget  = setsCount * repsPerSet;                    // target in REPS for Gym
+      newSets    = Array.from({ length: setsCount }, () => repsPerSet); // exact #sets × reps
+      newWeights = buildWeightsForSets(tpl, setsCount);
     } else {
       newTarget = Math.max(1, Math.round(base));               // calisthenics/etc: base is reps/mins/etc
       const setSize = Math.max(1, Number(tpl.defaultSetSize) || newTarget);
       newSets   = planSets(newTarget, setSize);
+      newWeights = [];
     }
     const newGroup = tpl.group || '';
 
@@ -282,6 +389,7 @@ async function materializeForDate(userId, date) {
           $setOnInsert: {
             userId, templateId: tpl._id, date,
             target: newTarget, setsPlanned: newSets, setsDone: [], repsDone: 0,
+            weightsPlanned: newWeights || [],
             status: 'on-track', group: tpl.group || ''
           }
         },
@@ -300,16 +408,18 @@ async function moveOneDailyInstance(di, destDate, userId) {
   if (!tpl) return { status: 'skipped', reason: 'template-missing', id: di._id.toString() };
 
   const base = computeTargetWithRules(tpl, destDate);
-  let newTarget, newSetsPlanned;
+  let newTarget, newSetsPlanned, newWeightsPlanned;
   if (tpl.kind === 'gym') {
     const repsPerSet = Math.max(1, Number(tpl.defaultSetSize) || 1);
     const setsCount  = Math.max(1, Math.round(base));
     newTarget        = setsCount * repsPerSet;                      // reps target
     newSetsPlanned   = Array.from({ length: setsCount }, () => repsPerSet);
+    newWeightsPlanned = buildWeightsForSets(tpl, setsCount);
   } else {
     newTarget        = Math.max(1, Math.round(base));
     const setSize    = Math.max(1, Number(tpl.defaultSetSize) || newTarget);
     newSetsPlanned   = planSets(newTarget, setSize);
+    newWeightsPlanned = [];
   }
   const newGroup = tpl.group || '';
 
@@ -321,14 +431,27 @@ async function moveOneDailyInstance(di, destDate, userId) {
     const mergedNotes = [existingDest.notes, di.notes].filter(Boolean).join('\n');
     const mergedRpe = di.rpe ?? existingDest.rpe ?? null;
     const mergedWeight = di.weight ?? existingDest.weight ?? null;
+    const mergedWeightsDone = [
+      ...((existingDest.weightsDone || []).map(x => (Number.isFinite(Number(x)) ? Number(x) : null))),
+      ...((di.weightsDone || []).map(x => (Number.isFinite(Number(x)) ? Number(x) : null)))
+    ];
 
     await DailyInstance.updateOne(
       { _id: existingDest._id },
       {
         $set: {
-          date: destDate, target: newTarget, setsPlanned: newSetsPlanned, group: newGroup,
-          setsDone: mergedSetsDone, repsDone: mergedRepsDone, notes: mergedNotes,
-          rpe: mergedRpe, weight: mergedWeight, status: computeStatus(mergedRepsDone, newTarget)
+          date: destDate,
+          target: newTarget,
+          setsPlanned: newSetsPlanned,
+          weightsPlanned: newWeightsPlanned || [],
+          group: newGroup,
+          setsDone: mergedSetsDone,
+          repsDone: mergedRepsDone,
+          notes: mergedNotes,
+          rpe: mergedRpe,
+          weight: mergedWeight,
+          weightsDone: mergedWeightsDone,
+          status: computeStatus(mergedRepsDone, newTarget)
         }
       }
     );
@@ -341,8 +464,9 @@ async function moveOneDailyInstance(di, destDate, userId) {
     {
       $setOnInsert: {
         userId, templateId: di.templateId, date: destDate,
-        target: newTarget, setsPlanned: newSetsPlanned,
+        target: newTarget, setsPlanned: newSetsPlanned, weightsPlanned: newWeightsPlanned || [],
         setsDone: di.setsDone || [], repsDone: di.repsDone || 0,
+        weightsDone: di.weightsDone || [],
         status: computeStatus(di.repsDone || 0, newTarget),
         group: newGroup, notes: di.notes || '', rpe: di.rpe ?? null, weight: di.weight ?? null
       }
@@ -501,16 +625,23 @@ app.patch('/metrics', auth, async (req, res) => {
 app.post('/templates', auth, async (req, res) => {
   const {
     name, unit = 'reps', dailyTarget, defaultSetSize, schedule,
-    kind = 'calisthenics', group = '', weight = null, progression, deloadRule
+    kind = 'calisthenics', group = '',
+    weight = null, // legacy
+    weightPattern,
+    progression, deloadRule
   } = req.body;
 
   if (!name || !dailyTarget) return res.status(400).json({ error: 'name & dailyTarget required' });
+
+  // sanitize/normalize weightPattern for gym
+  const wp = normalizeWeightPattern(kind, weightPattern ?? { mode: 'fixed', start: (weight ?? null) }, weight);
 
   const tpl = await TaskTemplate.create({
     userId: req.userId,
     name, unit, dailyTarget,
     defaultSetSize: defaultSetSize || dailyTarget,
     weight,
+    ...(wp ? { weightPattern: wp } : {}),
     schedule: schedule || {
       type: 'weekly',
       daysOfWeek: [1,2,3,4,5,6,0],
@@ -532,11 +663,33 @@ app.get('/templates', auth, async (req, res) => {
 });
 
 app.patch('/templates/:id', auth, async (req, res) => {
+  // fetch existing to handle kind/weightPattern transitions robustly
+  const existing = await TaskTemplate.findOne({ _id: req.params.id, userId: req.userId });
+  if (!existing) return res.status(404).json({ error: 'Not found' });
+
+  const patch = { ...req.body };
+
+  const nextKind = patch.kind ?? existing.kind;
+  const nextWeight = (typeof patch.weight !== 'undefined') ? patch.weight : existing.weight;
+  const maybeWp = (typeof patch.weightPattern !== 'undefined') ? patch.weightPattern : existing.weightPattern;
+
+  const wp = normalizeWeightPattern(nextKind, maybeWp, nextWeight);
+
+  if (nextKind !== 'gym') {
+    // clean up gym-only fields if switching away
+    patch.weight = null;
+    // omit weightPattern to rely on schema default-less usage for non-gym
+    patch.weightPattern = undefined;
+  } else {
+    patch.weightPattern = wp;
+  }
+
   const tpl = await TaskTemplate.findOneAndUpdate(
     { _id: req.params.id, userId: req.userId },
-    req.body,
+    patch,
     { new: true }
   );
+
   if (!tpl) return res.status(404).json({ error: 'Not found' });
   res.json(tpl);
 });
@@ -577,17 +730,32 @@ app.post('/templates/seed', auth, async (req, res) => {
       kind: 'gym',
       group: 'Back Day',
       unit: 'reps',
-      dailyTarget: 60,
-      defaultSetSize: 10,
-      weight: 40,
+      dailyTarget: 6,          // sets
+      defaultSetSize: 10,      // reps per set
+      weight: 60,              // legacy fixed
+      weightPattern: { mode: 'drop', start: 60, end: 40, step: 10, perSet: [] },
       schedule: { type: 'weekly', daysOfWeek: [2,5], startDate: today, endDate: null },
-      progression: { weeklyPct: 3, cap: 100 },
+      progression: { weeklyPct: 3, cap: 10 },
       deloadRule: { everyNWeeks: 6, scale: 0.75 }
     }
   ];
   const created = await TaskTemplate.insertMany(samples.map(s => ({ ...s, userId: req.userId })));
   res.json(created);
 });
+
+// --- Stats helpers ---
+function computeVolumeKgForInstance(di) {
+  const repsArr = Array.isArray(di.setsDone) ? di.setsDone : [];
+  const wArr = Array.isArray(di.weightsDone) ? di.weightsDone
+              : (Array.isArray(di.weightsPlanned) ? di.weightsPlanned : []);
+  let vol = 0;
+  for (let i = 0; i < repsArr.length; i++) {
+    const r = Number(repsArr[i]) || 0;
+    const w = Number(wArr[i]);
+    if (Number.isFinite(w) && w > 0 && r > 0) vol += r * w;
+  }
+  return vol;
+}
 
 // --- Routes: Stats ---
 app.get('/stats/weights', auth, async (req, res) => {
@@ -662,12 +830,15 @@ app.get('/stats/summary', auth, async (req, res) => {
     );
     const groups = Array.from(groupsSet);
 
+    // per-day training volume (kg)
+    const volumeKg = arr.reduce((s, x) => s + computeVolumeKgForInstance(x), 0);
+
     if (scheduled) {
       if (met) { currentStreak += 1; longestStreak = Math.max(longestStreak, currentStreak); }
       else { currentStreak = 0; }
     }
 
-    days.push({ date: key, target: targetSum, done: repsSum, scheduled, met, groups });
+    days.push({ date: key, target: targetSum, done: repsSum, scheduled, met, groups, volumeKg });
   }
 
   const weeks = [];
@@ -681,7 +852,8 @@ app.get('/stats/summary', auth, async (req, res) => {
       target: slice.reduce((s,x)=>s+x.target,0),
       done: slice.reduce((s,x)=>s+x.done,0),
       scheduledDays: slice.filter(x=>x.scheduled).length,
-      metDays: slice.filter(x=>x.met).length
+      metDays: slice.filter(x=>x.met).length,
+      volumeKg: slice.reduce((s,x)=>s+(x.volumeKg||0),0)
     });
   }
 
@@ -694,7 +866,8 @@ app.get('/stats/summary', auth, async (req, res) => {
     compliancePct, currentStreak, longestStreak,
     totals: {
       target: days.reduce((s,x)=>s+x.target,0),
-      done: days.reduce((s,x)=>s+x.done,0)
+      done: days.reduce((s,x)=>s+x.done,0),
+      volumeKg: days.reduce((s,x)=>s+(x.volumeKg||0),0)
     },
     days, weeks
   });
@@ -702,22 +875,32 @@ app.get('/stats/summary', auth, async (req, res) => {
 
 // --- Routes: Daily progress ---
 app.patch('/daily/:id/progress', auth, async (req, res) => {
-  const { addReps, completeSet, undoLast } = req.body;
+  const { addReps, completeSet, undoLast, weightForSet } = req.body;
 
   const di = await DailyInstance.findOne({ _id: req.params.id, userId: req.userId });
   if (!di) return res.status(404).json({ error: 'Not found' });
 
   if (undoLast) {
     if (di.setsDone.length) {
-      const last = di.setsDone.pop();
-      di.repsDone = Math.max(0, di.repsDone - last);
+      const lastReps = di.setsDone.pop();
+      di.repsDone = Math.max(0, di.repsDone - lastReps);
+      // remove last weight if any
+      if (Array.isArray(di.weightsDone) && di.weightsDone.length) di.weightsDone.pop();
     }
   } else if (typeof completeSet === 'number' && completeSet > 0) {
     di.setsDone.push(completeSet);
     di.repsDone += completeSet;
+    const w =
+      Number.isFinite(Number(weightForSet)) ? Number(weightForSet)
+      : (Array.isArray(di.weightsPlanned) ? di.weightsPlanned[di.setsDone.length - 1] : null);
+    if (!Array.isArray(di.weightsDone)) di.weightsDone = [];
+    di.weightsDone.push(Number.isFinite(w) ? Number(w) : null);
   } else if (typeof addReps === 'number' && addReps > 0) {
+    // free-form adds: record reps, weight unknown
     di.setsDone.push(addReps);
     di.repsDone += addReps;
+    if (!Array.isArray(di.weightsDone)) di.weightsDone = [];
+    di.weightsDone.push(null);
   }
 
   di.status = computeStatus(di.repsDone, di.target);
@@ -754,7 +937,6 @@ app.post('/daily/:id/move', auth, async (req, res) => {
   const result = await moveOneDailyInstance(di, destDate, req.userId);
   res.json({ ok: true, ...result });
 });
-
 
 // --- Routes: Bulk move all items from a day ---
 app.post('/daily/move-day', auth, async (req, res) => {

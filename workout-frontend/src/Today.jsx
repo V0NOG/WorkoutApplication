@@ -9,7 +9,6 @@ import DatePicker from "./DatePicker.jsx";
 import ProgressRing from "./components/ProgressRing.jsx";
 import MonthCalendar from "./components/MonthCalendar.jsx";
 import { appBus } from "./bus";
-import ThemeToggle from "./components/ThemeToggle.jsx";
 
 function useDebouncedEffect(fn, deps, delay = 500) {
   useEffect(() => {
@@ -216,22 +215,13 @@ function TaskCard({ item, onChanged }) {
     const dest = dayjs(moveDate).format("YYYY-MM-DD");
     await api.moveDaily(item._id, dest);
     setMoving(false);
-    await onChanged?.({
-      from: dayjs(item.date).format("YYYY-MM-DD"),
-      to: dest,
-      jumpTo: false,
-    });
+    await onChanged?.({ from: dayjs(item.date).format("YYYY-MM-DD"), to: dest, jumpTo: false });
   }
-
   async function moveToToday() {
     const todayStr = dayjs().format("YYYY-MM-DD");
     await api.moveDaily(item._id, todayStr);
     setMoving(false);
-    await onChanged?.({
-      from: dayjs(item.date).format("YYYY-MM-DD"),
-      to: todayStr,
-      jumpTo: true,
-    });
+    await onChanged?.({ from: dayjs(item.date).format("YYYY-MM-DD"), to: todayStr, jumpTo: true });
   }
 
   const [customReps, setCustomReps] = useState("");
@@ -244,49 +234,79 @@ function TaskCard({ item, onChanged }) {
 
   const isGym = item?.templateId?.kind === "gym";
   const unit = isGym ? "reps" : (item?.templateId?.unit || "reps");
+
   const repsPerSet = Number(item?.templateId?.defaultSetSize ?? 0);
   const plannedRaw = Array.isArray(item?.setsPlanned) ? item.setsPlanned : [];
   const planned = plannedRaw.map(n => Number(n));
-  const setsCountFromPlanned =
-    planned.length === 1 && Number.isFinite(planned[0]) ? Number(planned[0]) : 0;
+
+  const setsCountFromPlanned = planned.length === 1 && Number.isFinite(planned[0]) ? Number(planned[0]) : 0;
   const setsFromTpl = (Number(item?.templateId?.dailyTarget ?? 0) || setsCountFromPlanned);
   const looksLikeSizes =
     planned.length > 0 &&
     !(planned.length === 1 && planned[0] === setsFromTpl) &&
     planned.some(n => Number.isFinite(n) && n > 1);
+
   const sumPlanned = looksLikeSizes
     ? planned.reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0)
     : 0;
+
   const computedTargetReps = looksLikeSizes
     ? sumPlanned
     : (setsFromTpl > 0 && repsPerSet > 0 ? setsFromTpl * repsPerSet : 0);
+
   const backendTarget = Number(item?.target || 0);
   const done = Number(item.repsDone || 0);
-  const target = isGym
-    ? (computedTargetReps > 0 ? computedTargetReps : backendTarget)
-    : backendTarget;
+  const target = isGym ? (computedTargetReps > 0 ? computedTargetReps : backendTarget) : backendTarget;
   const pct = Math.min(1, done / Math.max(1, target));
-  const targetWeight = isGym ? (item?.templateId?.weight ?? null) : null;
-  const showTargetWeightText = isGym && Number(targetWeight) > 0;
 
-  async function add(n) { await api.addReps(item._id, n); await onChanged(); }
-  async function completeSet() {
-    const nextIndex = (item.setsDone?.length ?? 0);
-    const size = looksLikeSizes
-      ? ((planned[nextIndex] ?? repsPerSet) || 10)
-      : (repsPerSet || 10);
-    await api.completeSet(item._id, size);
+  // ---- NEW: per-set planned weights and "next set weight" input ----
+  const plannedWeights = Array.isArray(item?.weightsPlanned) ? item.weightsPlanned.map(Number) : [];
+  const nextIndex = (item.setsDone?.length ?? 0);
+  const nextSetSize = looksLikeSizes ? ((planned[nextIndex] ?? repsPerSet) || 10) : (repsPerSet || 10);
+  const plannedText = looksLikeSizes ? planned.join(" / ") : (setsFromTpl > 0 ? String(setsFromTpl) : (planned.length ? String(planned[0]) : "—"));
+
+  // default the "nextSetWeight" to the planned weight for that set (if any)
+  const [nextSetWeight, setNextSetWeight] = useState(() => {
+    const w = plannedWeights[nextIndex];
+    return Number.isFinite(w) ? String(w) : "";
+  });
+
+  // keep it in sync when you complete sets or when planned changes
+  useEffect(() => {
+    const w = plannedWeights[nextIndex];
+    setNextSetWeight(Number.isFinite(w) ? String(w) : "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nextIndex, item._id]); // item changes when plan reloads
+
+  async function add(n) {
+    await api.addReps(item._id, n);
     await onChanged();
   }
-  async function undo() { await api.undoLast(item._id); await onChanged(); }
+
+  async function completeSet() {
+    const size = nextSetSize;
+    const wNum = Number(nextSetWeight);
+    const weightForSet = (isGym && Number.isFinite(wNum)) ? wNum : undefined;
+    await api.completeSet(item._id, size, weightForSet);
+    await onChanged();
+  }
+
+  async function undo() {
+    await api.undoLast(item._id);
+    await onChanged();
+  }
+
   async function saveMeta() {
     try {
       setSaving(true);
       await api.setMeta(item._id, { notes, rpe: rpe === "" ? null : Number(rpe) });
       await onChanged();
-    } finally { setSaving(false); }
+    } finally {
+      setSaving(false);
+    }
   }
 
+  // Auto-save legacy day weight field for gym items (unchanged)
   useDebouncedEffect(() => {
     if (!isGym) return;
     (async () => {
@@ -295,122 +315,109 @@ function TaskCard({ item, onChanged }) {
     })();
   }, [weight], 600);
 
-  const nextIndex = (item.setsDone?.length ?? 0);
-  const nextSetSize = looksLikeSizes
-    ? ((planned[nextIndex] ?? repsPerSet) || 10)
-    : (repsPerSet || 10);
-
-  const plannedText = looksLikeSizes
-    ? planned.join(" / ")
-    : (setsFromTpl > 0 ? String(setsFromTpl) : (planned.length ? String(planned[0]) : "—"));
+  const targetWeight = isGym ? (item?.templateId?.weight ?? null) : null;
+  const showTargetWeightText = isGym && Number(targetWeight) > 0;
 
   return (
-    <div className="card p-5 md:p-6 space-y-4">
-      {/* HEADER */}
-      <div className="flex flex-wrap items-start gap-3">
-        <ProgressRing size={56} stroke={8} value={pct} />
-
-        {/* title + meta */}
-        <div className="min-w-0 mr-auto flex-1">
-          <div className="font-semibold flex flex-wrap items-center gap-2">
-            <span className="truncate">{item?.templateId?.name || "Task"}</span>
-
-            {isGym && (
-              <>
-                {showTargetWeightText && (
-                  <span className="small px-2 py-0.5 rounded-full border border-border">
-                    Target: {targetWeight} kg
-                  </span>
-                )}
-                <span className="small text-muted-foreground hidden sm:inline">•</span>
-                <label className="inline-flex items-center gap-2 small">
-                  <span className="opacity-80 hidden sm:inline">Actual:</span>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    className="h-8 w-[84px] rounded-lg border border-input bg-background text-center outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:border-ring"
-                    placeholder="kg"
-                    value={weight}
-                    onChange={(e)=>setWeight(e.target.value)}
-                  />
-                  <span className="opacity-80 hidden sm:inline">kg</span>
-                </label>
-              </>
-            )}
-          </div>
-
+    <div className="card p-4 md:p-6 space-y-4 overflow-hidden">
+      {/* Header */}
+      <div className="flex items-start gap-3">
+        <div className="shrink-0">
+          <ProgressRing size={48} stroke={7} value={pct} />
+        </div>
+        <div className="mr-auto min-w-0">
+          <div className="font-semibold truncate">{item?.templateId?.name || "Task"}</div>
           <div className="small text-muted-foreground">
-            {done}/{target} {unit}{showTargetWeightText ? ` of ${targetWeight}kg` : ""}
+            {done}/{target} {unit}{showTargetWeightText ? ` • ${targetWeight}kg` : ""}
           </div>
         </div>
-
-        {/* actions (right) – becomes a full-width row on mobile */}
-        <div
-          className={[
-            "flex items-center gap-2",
-            "w-full justify-between sm:w-auto sm:justify-end"
-          ].join(" ")}
-        >
-          <div className="small px-2 py-0.5 rounded-full border border-border capitalize shrink-0">
-            {item.status}
-          </div>
-
-          <Button
-            variant="outline"
-            size="sm"
-            className="rounded-full h-8 px-3 text-xs sm:h-9 sm:px-4 sm:text-sm"
-            onClick={() => setShowFeedback((s) => !s)}
-          >
-            {showFeedback ? "Hide feedback" : "Add feedback"}
-          </Button>
-
-          <div className="flex flex-wrap items-center gap-2">
-            {dayjs(item.date).format("YYYY-MM-DD") !== dayjs().format("YYYY-MM-DD") && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="rounded-full h-8 px-3 text-xs sm:h-9 sm:px-4 sm:text-sm"
-                onClick={moveToToday}
-              >
-                Do today
-              </Button>
-            )}
-
-            {!moving ? (
-              <Button
-                variant="outline"
-                size="sm"
-                className="rounded-full h-8 px-3 text-xs sm:h-9 sm:px-4 sm:text-sm truncate max-w-[160px] sm:max-w-none"
-                onClick={() => { setMoveDate(dayjs(item.date).format("YYYY-MM-DD")); setMoving(true); }}
-                title="Do on another day…"
-              >
-                <span className="sm:hidden">Another day…</span>
-                <span className="hidden sm:inline">Do on another day…</span>
-              </Button>
-            ) : (
-              <div className="flex items-center gap-2 w-full sm:w-auto">
-                {/* keep the picker compact on mobile so it doesn't push offscreen */}
-                <div className="w-[9.5rem] sm:w-auto">
-                  <DatePicker value={moveDate} onChange={setMoveDate} className="w-full" />
-                </div>
-                <Button size="sm" className="h-8 px-3 text-xs sm:h-9 sm:px-4 sm:text-sm" onClick={moveToSelected}>Move</Button>
-                <Button size="sm" variant="outline" className="h-8 px-3 text-xs sm:h-9 sm:px-4 sm:text-sm" onClick={() => setMoving(false)}>Cancel</Button>
-              </div>
-            )}
-          </div>
+        <div className="hidden sm:block small px-2 py-0.5 rounded-full border border-border capitalize shrink-0">
+          {item.status}
         </div>
       </div>
 
+      {/* ---- NEW: Next-set weight row (shows only for gym) ---- */}
+      {isGym && (
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="small text-muted-foreground">Next set:</div>
+          <div className="inline-flex items-center gap-2 rounded-xl border border-input bg-background px-2 py-1">
+            <span className="small">Weight</span>
+            <button
+              type="button"
+              className="px-2 rounded-md border border-input hover:bg-muted"
+              onClick={() => setNextSetWeight(prev => {
+                const n = Number(prev);
+                return Number.isFinite(n) ? String(Math.max(0, n - 2.5)) : "0";
+              })}
+            >−</button>
+            <input
+              type="number"
+              inputMode="decimal"
+              className="h-9 w-[90px] rounded-md border border-input bg-background px-3 text-center outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:border-ring"
+              placeholder={plannedWeights[nextIndex] != null ? String(plannedWeights[nextIndex]) : "kg"}
+              value={nextSetWeight}
+              onChange={(e) => setNextSetWeight(e.target.value)}
+            />
+            <span className="opacity-75 small">kg</span>
+            <button
+              type="button"
+              className="px-2 rounded-md border border-input hover:bg-muted"
+              onClick={() => setNextSetWeight(prev => {
+                const n = Number(prev);
+                return Number.isFinite(n) ? String(n + 2.5) : "2.5";
+              })}
+            >+</button>
+          </div>
+          {Number.isFinite(Number(plannedWeights[nextIndex])) && (
+            <div className="small text-muted-foreground">
+              Planned: <span className="font-medium">{plannedWeights[nextIndex]} kg</span>
+            </div>
+          )}
+        </div>
+      )}
 
-      <div className="flex flex-wrap items-center gap-2">
+      {/* ===== MOBILE ACTIONS ===== */}
+      <div className="sm:hidden space-y-2">
+        <Button className="w-full rounded-full h-11" onClick={completeSet}>
+          Complete set (+{nextSetSize})
+        </Button>
+
+        <div className="grid grid-cols-3 gap-2">
+          <Button variant="outline" className="rounded-full h-10" onClick={() => add(1)}>+1</Button>
+          <Button variant="outline" className="rounded-full h-10" onClick={() => add(5)}>+5</Button>
+          <Button variant="outline" className="rounded-full h-10" onClick={undo}>Undo</Button>
+        </div>
+
+        {!moving ? (
+          <Button
+            variant="outline"
+            className="w-full rounded-full h-10 text-[13px]"
+            onClick={() => {
+              setMoveDate(dayjs(item.date).format("YYYY-MM-DD"));
+              setMoving(true);
+            }}
+          >
+            Another day…
+          </Button>
+        ) : (
+          <div className="flex items-center gap-2">
+            <DatePicker value={moveDate} onChange={setMoveDate} />
+            <Button className="rounded-full" onClick={moveToSelected}>Move</Button>
+            <Button variant="outline" className="rounded-full" onClick={() => setMoving(false)}>Cancel</Button>
+          </div>
+        )}
+      </div>
+
+      {/* ===== DESKTOP/TABLET ACTIONS ===== */}
+      <div className="hidden sm:flex sm:flex-wrap sm:items-center sm:gap-2">
         <Button className="rounded-full px-4" onClick={completeSet}>
           Complete set (+{nextSetSize})
         </Button>
-        <Button variant="outline" className="rounded-full px-3" onClick={()=>add(10)}>+10</Button>
-        <Button variant="outline" className="rounded-full px-3" onClick={()=>add(5)}>+5</Button>
-        <Button variant="outline" className="rounded-full px-3" onClick={()=>add(1)}>+1</Button>
+        <Button variant="outline" className="rounded-full px-3" onClick={() => add(10)}>+10</Button>
+        <Button variant="outline" className="rounded-full px-3" onClick={() => add(5)}>+5</Button>
+        <Button variant="outline" className="rounded-full px-3" onClick={() => add(1)}>+1</Button>
 
-        <div className="inline-flex items-center gap-2">
+        <div className="hidden md:inline-flex items-center gap-2">
           <Input
             type="number"
             inputMode="numeric"
@@ -420,13 +427,7 @@ function TaskCard({ item, onChanged }) {
             value={customReps}
             onChange={(e) => setCustomReps(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") addCustom(); }}
-            className={[
-              "h-9 w-14 rounded-full px-3 text-center",
-              "border border-input bg-background",
-              "placeholder:text-muted-foreground",
-              "focus:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:border-ring",
-              "transition-colors hover:bg-muted"
-            ].join(" ")}
+            className="h-9 w-14 rounded-full px-3 text-center border border-input bg-background placeholder:text-muted-foreground focus:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:border-ring transition-colors hover:bg-muted"
           />
           <Button
             variant="outline"
@@ -439,17 +440,53 @@ function TaskCard({ item, onChanged }) {
         </div>
 
         <Button variant="outline" className="rounded-full px-3" onClick={undo}>Undo</Button>
+
+        <div className="ml-auto flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="rounded-full"
+            onClick={() => setShowFeedback((s) => !s)}
+          >
+            {showFeedback ? "Hide feedback" : "Add feedback"}
+          </Button>
+
+          {dayjs(item.date).format("YYYY-MM-DD") !== dayjs().format("YYYY-MM-DD") && (
+            <Button variant="outline" size="sm" className="rounded-full" onClick={moveToToday}>
+              Do today
+            </Button>
+          )}
+
+          {!moving ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-full"
+              onClick={() => {
+                setMoveDate(dayjs(item.date).format("YYYY-MM-DD"));
+                setMoving(true);
+              }}
+            >
+              Do on another day…
+            </Button>
+          ) : (
+            <div className="flex items-center gap-2">
+              <DatePicker value={moveDate} onChange={setMoveDate} />
+              <Button size="sm" className="rounded-full" onClick={moveToSelected}>Move</Button>
+              <Button size="sm" variant="outline" className="rounded-full" onClick={() => setMoving(false)}>Cancel</Button>
+            </div>
+          )}
+        </div>
       </div>
 
       {showFeedback && (
-        <div className="grid grid-cols-1 md:grid-cols-[1fr_220px] gap-3 items-start">
+        <div className="hidden sm:grid grid-cols-1 md:grid-cols:[1fr_220px] gap-3 items-start">
           <Textarea
             className="h-[88px]"
             placeholder="How did it feel?"
             value={notes}
             onChange={(e)=>setNotes(e.target.value)}
           />
-
           <div className="flex flex-col gap-2 md:h-[88px]">
             <Input
               type="number"
@@ -595,7 +632,6 @@ export default function Today() {
   // Load templates and return them so callers can recompute with freshest data
   async function loadTemplates() {
     try {
-      // ← use the same API your Templates.jsx uses
       const tpl = (await api.listTemplates?.()) ??
                   (await api.getTemplates?.()) ??
                   (await api.templates?.list?.()) ??
@@ -780,15 +816,14 @@ export default function Today() {
         {/* Left: arrows + date */}
         <div
           className={[
-            "flex items-center gap-1.5 min-w-0",          // allow children to shrink
-            "flex-1",                                     // claim the middle space
-            bulkMoveOpen ? "hidden sm:flex" : ""          // current mobile logic
+            "flex items-center gap-1.5 min-w-0",
+            "flex-1",
+            bulkMoveOpen ? "hidden sm:flex" : ""
           ].join(" ")}
         >
           <Button variant="outline" size="icon" onClick={prevDay} aria-label="Previous day">←</Button>
 
-          {/* Wrap the DatePicker so we can size it responsively */}
-          <div className="min-w-0 w-auto sm:flex-1">      {/* full width from sm+ */}
+          <div className="min-w-0 w-auto sm:flex-1">
             <DatePicker value={date} onChange={setDate} className="w-full" />
           </div>
 
@@ -799,8 +834,7 @@ export default function Today() {
         {/* Right: bulk move controls */}
         <div
           className={[
-            "flex items-center gap-1.5 shrink-0",         // don't let this stretch the row
-            // default pushes right; on mobile while open, take the left slot
+            "flex items-center gap-1.5 shrink-0",
             bulkMoveOpen ? "ml-0 w-full justify-start sm:ml-auto sm:w-auto" : "ml-auto"
           ].join(" ")}
         >
@@ -809,7 +843,7 @@ export default function Today() {
               variant="outline"
               onClick={bulkMoveToToday}
               disabled={bulkBusy}
-              className="h-9 px-3 text-xs sm:h-10 sm:px-4 sm:text-sm"   // smaller on mobile
+              className="h-9 px-3 text-xs sm:h-10 sm:px-4 sm:text-sm"
             >
               <span className="sm:hidden">Move to today</span>
               <span className="hidden sm:inline">Move all to today</span>
@@ -823,14 +857,13 @@ export default function Today() {
                 setBulkToDate(dayjs(date).format("YYYY-MM-DD"));
                 setBulkMoveOpen(true);
               }}
-              className="h-9 px-3 text-xs sm:h-10 sm:px-4 sm:text-sm"   // smaller on mobile
+              className="h-9 px-3 text-xs sm:h-10 sm:px-4 sm:text-sm"
             >
               <span className="sm:hidden">Move…</span>
               <span className="hidden sm:inline">Move all…</span>
             </Button>
           ) : (
             <div className="flex items-center gap-1.5">
-              {/* keep this compact on mobile so it doesn't push offscreen */}
               <div className="w-[9.5rem] sm:w-auto">
                 <DatePicker value={bulkToDate} onChange={setBulkToDate} className="w-full" />
               </div>
