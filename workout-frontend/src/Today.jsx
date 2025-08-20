@@ -1,3 +1,4 @@
+// src/Today.jsx
 import React, { useEffect, useState } from "react";
 import dayjs from "dayjs";
 import { api } from "./api";
@@ -41,9 +42,9 @@ function isMonthDayInTz(tz, mm = "08", dd = "16") {
 function bdayTestOverride() {
   try {
     const qs = new URLSearchParams(window.location.search);
-    if (qs.get('bday') === '1') return true;
-    if (localStorage.getItem('bday-test') === '1') return true;
-    if (import.meta.env.VITE_BDAY_TEST === '1') return true;
+    if (qs.get("bday") === "1") return true;
+    if (localStorage.getItem("bday-test") === "1") return true;
+    if (import.meta.env.VITE_BDAY_TEST === "1") return true;
   } catch {}
   return false;
 }
@@ -120,7 +121,6 @@ function MetricsCard({ date }) {
     () => localStorage.getItem("metricsCollapsed") === "true"
   );
 
-  // load data...
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -137,7 +137,6 @@ function MetricsCard({ date }) {
     return () => { alive = false; };
   }, [date]);
 
-  // debounced autosave
   useDebouncedEffect(() => {
     if (loading) return;
     (async () => {
@@ -155,7 +154,7 @@ function MetricsCard({ date }) {
         <Segmented
           value={collapsed ? "off" : "on"}
           onChange={(v) => {
-            const next = v === "off"; // off => collapsed
+            const next = v === "off";
             setCollapsed(next);
             localStorage.setItem("metricsCollapsed", String(next));
           }}
@@ -195,9 +194,7 @@ function MetricsCard({ date }) {
           </label>
 
           {(weightKg !== "" || heightCm !== "") && (
-            <span className="small text-muted-foreground">
-              Autosaved
-            </span>
+            <span className="small text-muted-foreground">Autosaved</span>
           )}
         </div>
       )}
@@ -209,10 +206,9 @@ function TaskCard({ item, onChanged }) {
   const [saving, setSaving] = useState(false);
   const [notes, setNotes] = useState(item.notes || "");
   const [rpe, setRpe] = useState(item.rpe ?? "");
-  const [weight, setWeight] = useState(item.weight ?? item.meta?.weight ?? ""); // user actual
+  const [weight, setWeight] = useState(item.weight ?? item.meta?.weight ?? "");
   const [showFeedback, setShowFeedback] = useState(false);
 
-  // per-item move
   const [moving, setMoving] = useState(false);
   const [moveDate, setMoveDate] = useState(dayjs().format("YYYY-MM-DD"));
 
@@ -223,7 +219,7 @@ function TaskCard({ item, onChanged }) {
     await onChanged?.({
       from: dayjs(item.date).format("YYYY-MM-DD"),
       to: dest,
-      jumpTo: false, // stay on current day after a custom move
+      jumpTo: false,
     });
   }
 
@@ -234,11 +230,10 @@ function TaskCard({ item, onChanged }) {
     await onChanged?.({
       from: dayjs(item.date).format("YYYY-MM-DD"),
       to: todayStr,
-      jumpTo: true, // after "Do today" we jump to today
+      jumpTo: true,
     });
   }
 
-  // custom reps
   const [customReps, setCustomReps] = useState("");
   async function addCustom() {
     const n = Number(customReps);
@@ -247,48 +242,30 @@ function TaskCard({ item, onChanged }) {
     setCustomReps("");
   }
 
-  // ---------- GYM TOTALS (sets × reps) ----------
   const isGym = item?.templateId?.kind === "gym";
-
-  // Force unit to "reps" for gym so text reads "... reps"
   const unit = isGym ? "reps" : (item?.templateId?.unit || "reps");
-
-  const repsPerSet   = Number(item?.templateId?.defaultSetSize ?? 0); // e.g. 20
-  // planned array from backend
-  const plannedRaw   = Array.isArray(item?.setsPlanned) ? item.setsPlanned : [];
-  const planned      = plannedRaw.map(n => Number(n));
-
-  // If dailyTarget is missing but setsPlanned is a single count like [5], use that.
+  const repsPerSet = Number(item?.templateId?.defaultSetSize ?? 0);
+  const plannedRaw = Array.isArray(item?.setsPlanned) ? item.setsPlanned : [];
+  const planned = plannedRaw.map(n => Number(n));
   const setsCountFromPlanned =
     planned.length === 1 && Number.isFinite(planned[0]) ? Number(planned[0]) : 0;
-
-  const setsFromTpl  = (Number(item?.templateId?.dailyTarget ?? 0) || setsCountFromPlanned);
-
-  // Heuristic: does setsPlanned look like per-set rep sizes (20,20,...) vs a single count ([5])?
+  const setsFromTpl = (Number(item?.templateId?.dailyTarget ?? 0) || setsCountFromPlanned);
   const looksLikeSizes =
     planned.length > 0 &&
     !(planned.length === 1 && planned[0] === setsFromTpl) &&
     planned.some(n => Number.isFinite(n) && n > 1);
-
   const sumPlanned = looksLikeSizes
     ? planned.reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0)
     : 0;
-
-  // Prefer sizes sum; otherwise compute sets × reps
   const computedTargetReps = looksLikeSizes
     ? sumPlanned
     : (setsFromTpl > 0 && repsPerSet > 0 ? setsFromTpl * repsPerSet : 0);
-
-  const backendTarget = Number(item?.target || 0); // often "sets" for gym
+  const backendTarget = Number(item?.target || 0);
   const done = Number(item.repsDone || 0);
-
-  // Final target: for gym use computed reps if available, else fallback to backend.
   const target = isGym
     ? (computedTargetReps > 0 ? computedTargetReps : backendTarget)
     : backendTarget;
-
   const pct = Math.min(1, done / Math.max(1, target));
-
   const targetWeight = isGym ? (item?.templateId?.weight ?? null) : null;
   const showTargetWeightText = isGym && Number(targetWeight) > 0;
 
@@ -310,7 +287,6 @@ function TaskCard({ item, onChanged }) {
     } finally { setSaving(false); }
   }
 
-  // autosave actual weight
   useDebouncedEffect(() => {
     if (!isGym) return;
     (async () => {
@@ -324,17 +300,18 @@ function TaskCard({ item, onChanged }) {
     ? ((planned[nextIndex] ?? repsPerSet) || 10)
     : (repsPerSet || 10);
 
-  // "Planned sets" display: list sizes when we have sizes, or just the count otherwise
   const plannedText = looksLikeSizes
     ? planned.join(" / ")
     : (setsFromTpl > 0 ? String(setsFromTpl) : (planned.length ? String(planned[0]) : "—"));
 
   return (
     <div className="card p-5 md:p-6 space-y-4">
-      <div className="flex items-center gap-3">
+      {/* HEADER */}
+      <div className="flex flex-wrap items-start gap-3">
         <ProgressRing size={56} stroke={8} value={pct} />
 
-        <div className="mr-auto min-w-0">
+        {/* title + meta */}
+        <div className="min-w-0 mr-auto flex-1">
           <div className="font-semibold flex flex-wrap items-center gap-2">
             <span className="truncate">{item?.templateId?.name || "Task"}</span>
 
@@ -345,20 +322,18 @@ function TaskCard({ item, onChanged }) {
                     Target: {targetWeight} kg
                   </span>
                 )}
-
-                <span className="small text-muted-foreground">•</span>
-
+                <span className="small text-muted-foreground hidden sm:inline">•</span>
                 <label className="inline-flex items-center gap-2 small">
-                  <span className="opacity-80">Actual:</span>
+                  <span className="opacity-80 hidden sm:inline">Actual:</span>
                   <input
                     type="number"
                     inputMode="decimal"
-                    className="h-8 w-[90px] rounded-lg border border-input bg-background text-center outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:border-ring"
+                    className="h-8 w-[84px] rounded-lg border border-input bg-background text-center outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:border-ring"
                     placeholder="kg"
                     value={weight}
                     onChange={(e)=>setWeight(e.target.value)}
                   />
-                  <span className="opacity-80">kg</span>
+                  <span className="opacity-80 hidden sm:inline">kg</span>
                 </label>
               </>
             )}
@@ -369,47 +344,64 @@ function TaskCard({ item, onChanged }) {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <div className="small px-2 py-0.5 rounded-full border border-border capitalize">
+        {/* actions (right) – becomes a full-width row on mobile */}
+        <div
+          className={[
+            "flex items-center gap-2",
+            "w-full justify-between sm:w-auto sm:justify-end"
+          ].join(" ")}
+        >
+          <div className="small px-2 py-0.5 rounded-full border border-border capitalize shrink-0">
             {item.status}
           </div>
 
-          {/* feedback toggle */}
           <Button
             variant="outline"
             size="sm"
-            className="rounded-full"
+            className="rounded-full h-8 px-3 text-xs sm:h-9 sm:px-4 sm:text-sm"
             onClick={() => setShowFeedback((s) => !s)}
           >
             {showFeedback ? "Hide feedback" : "Add feedback"}
           </Button>
 
-          {/* per-item move */}
           <div className="flex flex-wrap items-center gap-2">
             {dayjs(item.date).format("YYYY-MM-DD") !== dayjs().format("YYYY-MM-DD") && (
-              <Button variant="outline" size="sm" className="rounded-full" onClick={moveToToday}>
+              <Button
+                variant="outline"
+                size="sm"
+                className="rounded-full h-8 px-3 text-xs sm:h-9 sm:px-4 sm:text-sm"
+                onClick={moveToToday}
+              >
                 Do today
               </Button>
             )}
+
             {!moving ? (
-              <Button variant="outline" size="sm" className="rounded-full" onClick={() => {
-                setMoveDate(dayjs(item.date).format("YYYY-MM-DD"));
-                setMoving(true);
-              }}>
-                Do on another day…
+              <Button
+                variant="outline"
+                size="sm"
+                className="rounded-full h-8 px-3 text-xs sm:h-9 sm:px-4 sm:text-sm truncate max-w-[160px] sm:max-w-none"
+                onClick={() => { setMoveDate(dayjs(item.date).format("YYYY-MM-DD")); setMoving(true); }}
+                title="Do on another day…"
+              >
+                <span className="sm:hidden">Another day…</span>
+                <span className="hidden sm:inline">Do on another day…</span>
               </Button>
             ) : (
-              <div className="flex items-center gap-2">
-                <DatePicker value={moveDate} onChange={setMoveDate} />
-                <Button size="sm" onClick={moveToSelected}>Move</Button>
-                <Button size="sm" variant="outline" onClick={() => setMoving(false)}>Cancel</Button>
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                {/* keep the picker compact on mobile so it doesn't push offscreen */}
+                <div className="w-[9.5rem] sm:w-auto">
+                  <DatePicker value={moveDate} onChange={setMoveDate} className="w-full" />
+                </div>
+                <Button size="sm" className="h-8 px-3 text-xs sm:h-9 sm:px-4 sm:text-sm" onClick={moveToSelected}>Move</Button>
+                <Button size="sm" variant="outline" className="h-8 px-3 text-xs sm:h-9 sm:px-4 sm:text-sm" onClick={() => setMoving(false)}>Cancel</Button>
               </div>
             )}
           </div>
         </div>
       </div>
 
-      {/* reps buttons */}
+
       <div className="flex flex-wrap items-center gap-2">
         <Button className="rounded-full px-4" onClick={completeSet}>
           Complete set (+{nextSetSize})
@@ -418,7 +410,6 @@ function TaskCard({ item, onChanged }) {
         <Button variant="outline" className="rounded-full px-3" onClick={()=>add(5)}>+5</Button>
         <Button variant="outline" className="rounded-full px-3" onClick={()=>add(1)}>+1</Button>
 
-        {/* custom reps */}
         <div className="inline-flex items-center gap-2">
           <Input
             type="number"
@@ -450,7 +441,6 @@ function TaskCard({ item, onChanged }) {
         <Button variant="outline" className="rounded-full px-3" onClick={undo}>Undo</Button>
       </div>
 
-      {/* notes / rpe */}
       {showFeedback && (
         <div className="grid grid-cols-1 md:grid-cols-[1fr_220px] gap-3 items-start">
           <Textarea
@@ -477,46 +467,74 @@ function TaskCard({ item, onChanged }) {
         </div>
       )}
 
-      <div className="small text-muted-foreground">
-        Planned sets: {plannedText}
-      </div>
+      <div className="small text-muted-foreground">Planned sets: {plannedText}</div>
     </div>
   );
 }
 
 /** Robust: is a template active on a date?
- *  - Accepts daysOfWeek as 0–6 (Sun..Sat) OR 1–7 (Mon..Sun)
- *  - Supports type "weekly" (default) and treats others as “always” unless start/end exclude.
+ * Accepts 0–6, 1–7, "Mon"/"Tue"... strings, boolean arrays, or empty (-> every day).
  */
 function isActiveOnDate(tpl, dateStr) {
   const d = dayjs(dateStr);
+
   const startOk = !tpl.schedule?.startDate || !d.isBefore(dayjs(tpl.schedule.startDate), "day");
-  const endOk = !tpl.schedule?.endDate || !d.isAfter(dayjs(tpl.schedule.endDate), "day");
+  const endOk   = !tpl.schedule?.endDate   || !d.isAfter(dayjs(tpl.schedule.endDate), "day");
   if (!startOk || !endOk) return false;
 
   const type = tpl.schedule?.type || "weekly";
-  if (type !== "weekly") return true; // non-weekly => show throughout window
+  if (type !== "weekly") return true;
 
   const raw = tpl.schedule?.daysOfWeek ?? [];
-  const nums = raw.map((n) => Number(n)).filter((n) => Number.isFinite(n));
 
-  // dayjs: 0=Sun..6=Sat
-  const sun0 = d.day(); // 0..6
-  const mon1 = ((sun0 + 6) % 7) + 1; // 1..7
+  const isBoolArr = Array.isArray(raw) && raw.length && raw.every(v => typeof v === "boolean");
+  if (isBoolArr) {
+    const nums = raw.map((v, idx) => (v ? idx : -1)).filter(n => n >= 0);
+    if (!nums.length) return true;
+    const sun0 = d.day();
+    const mon1 = ((sun0 + 6) % 7) + 1;
+    return nums.includes(sun0) || nums.includes(mon1);
+  }
 
-  // Support either scheme
-  return nums.includes(sun0) || nums.includes(mon1);
+  const DAY_MAP = { sun:0, mon:1, tue:2, tues:2, wed:3, thu:4, thur:4, thurs:4, fri:5, sat:6 };
+  const norm = []
+    .concat(raw)
+    .map(v => {
+      if (typeof v === "number") return v;
+      if (typeof v === "string") {
+        const s = v.trim().toLowerCase();
+        if (/^\d+$/.test(s)) return Number(s);
+        return DAY_MAP[s];
+      }
+      return undefined;
+    })
+    .filter(v => Number.isFinite(v));
+
+  if (!norm.length) return true;
+
+  const sun0 = d.day();
+  const mon1 = ((sun0 + 6) % 7) + 1;
+  return norm.includes(sun0) || norm.includes(mon1);
+}
+
+// ✅ Prefer the real "group" name if present, then fall back gracefully.
+function pickGroupLabel(tpl) {
+  const candidates = [
+    tpl?.group,
+    tpl?.groupName,
+    tpl?.templateGroup,
+    tpl?.label,
+    tpl?.name,
+  ];
+  for (const c of candidates) {
+    if (typeof c === "string" && c.trim()) return c.trim();
+  }
+  return ""; // no label -> skip
 }
 
 function Segmented({ value, onChange, options, className = "" }) {
   return (
-    <div
-      className={[
-        "inline-flex h-10 items-center rounded-lg border border-input bg-muted px-1",
-        "max-w-full",
-        className
-      ].join(" ")}
-    >
+    <div className={["inline-flex h-10 items-center rounded-lg border border-input bg-muted px-1", "max-w-full", className].join(" ")}>
       {options.map(({ value: v, label }) => {
         const active = value === v;
         return (
@@ -527,9 +545,7 @@ function Segmented({ value, onChange, options, className = "" }) {
             className={[
               "px-3 py-1.5 rounded-md text-sm font-medium transition",
               "whitespace-nowrap",
-              active
-                ? "bg-background text-foreground shadow-sm border border-input"
-                : "text-muted-foreground"
+              active ? "bg-background text-foreground shadow-sm border border-input" : "text-muted-foreground"
             ].join(" ")}
           >
             {label}
@@ -550,23 +566,18 @@ export default function Today() {
   const [visibleMonth, setVisibleMonth] = useState(dayjs());
   const [statusByDate, setStatusByDate] = useState({});
   const [groupsByDate, setGroupsByDate] = useState({});
-
-  // keep templates so we can compute recurring group pills
   const [templates, setTemplates] = useState([]);
 
-  // Bulk move (whole-day)
   const [bulkMoveOpen, setBulkMoveOpen] = useState(false);
   const [bulkToDate, setBulkToDate] = useState(dayjs().format("YYYY-MM-DD"));
   const [bulkBusy, setBulkBusy] = useState(false);
 
-  // Birthday overlay
   const [me, setMe] = useState(null);
   const [showBday, setShowBday] = useState(false);
 
-  // Called after a single item is moved.
   const handleItemChanged = async ({ from, to, jumpTo } = {}) => {
     await loadPlan(date);
-    await loadRollingCalendarData(visibleMonth); // recompute 3-month window
+    await loadRollingCalendarData(visibleMonth, 4, templates);
     if (jumpTo && to) setDate(to);
   };
 
@@ -581,38 +592,40 @@ export default function Today() {
     }
   }
 
+  // Load templates and return them so callers can recompute with freshest data
   async function loadTemplates() {
     try {
-      const tpl = (await api.getTemplates?.()) ?? (await api.templates?.list?.()) ?? [];
-      setTemplates(Array.isArray(tpl) ? tpl : []);
+      // ← use the same API your Templates.jsx uses
+      const tpl = (await api.listTemplates?.()) ??
+                  (await api.getTemplates?.()) ??
+                  (await api.templates?.list?.()) ??
+                  [];
+      const list = Array.isArray(tpl) ? tpl : [];
+      setTemplates(list);
+      return list;
     } catch {
       setTemplates([]);
+      return [];
     }
   }
 
-  /** Compute groups/status for a rolling window covering the visible month
-   *  PLUS the next 3 months (and their spillover weeks).
-   */
-  async function loadRollingCalendarData(anchorMonth = visibleMonth, monthsAhead = 3) {
-    // Start at the first cell of the anchor month’s 42-cell grid
+  // Compute calendar heat map + groups (optionally with a fresh templates list to avoid races)
+  async function loadRollingCalendarData(anchorMonth = visibleMonth, monthsAhead = 4, templatesOverride = null) {
     const startOfMonth = anchorMonth.startOf("month");
     const gridStart = startOfMonth.subtract(startOfMonth.day(), "day");
-
-    // End at the last cell of the grid for (anchor + monthsAhead)
     const endMonth = anchorMonth.add(monthsAhead, "month").endOf("month");
     const gridEnd = endMonth.add(6 - endMonth.day(), "day");
 
     const from = gridStart.format("YYYY-MM-DD");
-    const to   = gridEnd.format("YYYY-MM-DD");
+    const to = gridEnd.format("YYYY-MM-DD");
 
-    const s    = await api.statsSummary(from, to);
+    const s = await api.statsSummary(from, to);
 
-    // Only color TODAY; everything else neutral
     const todayStr = dayjs().format("YYYY-MM-DD");
     const statusMap = {};
     for (const d of s?.days ?? []) {
       if (d.date === todayStr) {
-        const done   = Number(d?.done ?? 0);
+        const done = Number(d?.done ?? 0);
         const target = Number(d?.target ?? 0);
         let status = "none";
         if (target > 0) {
@@ -629,21 +642,21 @@ export default function Today() {
     }
     setStatusByDate(statusMap);
 
-    // Start with whatever groups the API already gave us
+    // Base groups from API (unique)
     const gmap = {};
     for (const d of s?.days ?? []) {
       gmap[d.date] = Array.isArray(d.groups) ? [...new Set(d.groups)] : [];
     }
 
-    // Merge recurring template groups across the whole rolling window
-    const tplList = Array.isArray(templates) ? templates : [];
+    // Merge recurring template groups
+    const tplList = Array.isArray(templatesOverride) ? templatesOverride : (Array.isArray(templates) ? templates : []);
     if (tplList.length) {
       let cursor = gridStart;
       while (!cursor.isAfter(gridEnd, "day")) {
         const ds = cursor.format("YYYY-MM-DD");
         const set = new Set(gmap[ds] || []);
         for (const tpl of tplList) {
-          const grp = (tpl.group || tpl?.name || "").trim();
+          const grp = pickGroupLabel(tpl);
           if (!grp) continue;
           if (isActiveOnDate(tpl, ds)) set.add(grp);
         }
@@ -656,10 +669,9 @@ export default function Today() {
   }
 
   async function refreshAll(d = date) {
-    await Promise.all([loadPlan(d), loadRollingCalendarData(visibleMonth)]);
+    await Promise.all([loadPlan(d), loadRollingCalendarData(visibleMonth, 4, templates)]);
   }
 
-  // bulk move actions
   async function bulkMove(to) {
     setBulkBusy(true);
     try {
@@ -676,69 +688,78 @@ export default function Today() {
     await bulkMove(dayjs().format("YYYY-MM-DD"));
   }
 
-  useEffect(() => { loadPlan(date); setVisibleMonth(dayjs(date)); }, [date]);
-
-  // Recompute data when the visible month OR templates change
-  useEffect(() => { loadRollingCalendarData(visibleMonth); }, [visibleMonth, templates]);
-
-  // Load templates once
-  useEffect(() => { loadTemplates(); }, []);
-
-  // birthday check on mount (uses browser timezone)
   useEffect(() => {
     (async () => {
-      try {
-        const m = await api.me();
-        setMe(m);
-
-        const emails = (import.meta.env.VITE_BDAY_EMAILS || "")
-          .split(",")
-          .map(s => s.trim().toLowerCase())
-          .filter(Boolean);
-
-        const okEmail = emails.includes((m?.email || "").toLowerCase());
-        const tz = getBrowserTimeZone();
-
-        const override = bdayTestOverride();
-        const isRealBirthday = isMonthDayInTz(tz, "08", "16");
-        const shouldShow = override || (okEmail && isRealBirthday);
-
-        const todayInTz = new Intl.DateTimeFormat("en-CA", {
-          timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
-        }).format(new Date());
-
-        const seenKey = `bday-shown:${(m?.email || "unknown").toLowerCase()}:${todayInTz}`;
-        const alreadyShown = localStorage.getItem(seenKey);
-
-        if (shouldShow && !alreadyShown) {
-          setShowBday(true);
-          localStorage.setItem(seenKey, "1");
-        }
-      } catch {
-        // ignore
-      }
+      await loadPlan(date);
+      setVisibleMonth(dayjs(date));
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date]);
+
+  // INITIAL LOAD: fetch templates, then compute with the fetched list
+  useEffect(() => {
+    (async () => {
+      const latest = await loadTemplates();
+      await loadRollingCalendarData(visibleMonth, 4, latest);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Recompute when month or templates actually change
+  useEffect(() => {
+    loadRollingCalendarData(visibleMonth, 4, templates);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleMonth, templates]);
+
+  // Template bus / storage / tab-visibility — always refetch then recompute with newest list
   useEffect(() => {
     const handler = () => {
       (async () => {
-        await Promise.all([loadPlan(date), loadRollingCalendarData(visibleMonth)]);
-        await loadTemplates();
+        const latest = await loadTemplates();
+        await loadPlan(date);
+        await loadRollingCalendarData(visibleMonth, 4, latest);
       })();
     };
+
     appBus.addEventListener("templates:changed", handler);
     const onStorage = (e) => { if (e.key === "templates:changed") handler(); };
     window.addEventListener("storage", onStorage);
     const onVisibility = () => { if (!document.hidden) handler(); };
     document.addEventListener("visibilitychange", onVisibility);
+
     return () => {
       appBus.removeEventListener("templates:changed", handler);
       window.removeEventListener("storage", onStorage);
       document.removeEventListener("visibilitychange", onVisibility);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date, visibleMonth]);
 
+  // birthday check on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const m = await api.me();
+        setMe(m);
+        const emails = (import.meta.env.VITE_BDAY_EMAILS || "")
+          .split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+        const okEmail = emails.includes((m?.email || "").toLowerCase());
+        const tz = getBrowserTimeZone();
+        const override = bdayTestOverride();
+        const isRealBirthday = isMonthDayInTz(tz, "08", "16");
+        const shouldShow = override || (okEmail && isRealBirthday);
+        const todayInTz = new Intl.DateTimeFormat("en-CA", {
+          timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
+        }).format(new Date());
+        const seenKey = `bday-shown:${(m?.email || "unknown").toLowerCase()}:${todayInTz}`;
+        const alreadyShown = localStorage.getItem(seenKey);
+        if (shouldShow && !alreadyShown) {
+          setShowBday(true);
+          localStorage.setItem(seenKey, "1");
+        }
+      } catch {}
+    })();
+  }, []);
 
   function prevDay() { setDate(dayjs(date).subtract(1, "day").format("YYYY-MM-DD")); }
   function nextDay() { setDate(dayjs(date).add(1, "day").format("YYYY-MM-DD")); }
@@ -755,31 +776,41 @@ export default function Today() {
 
   return (
     <div className="stack">
-      <div className="card p-3 md:p-4 flex items-center gap-1.5">
-        {/* Date navigation */}
+      <div className="card p-3 md:p-4 flex flex-wrap items-center gap-1.5">
+        {/* Left: arrows + date */}
         <div
           className={[
-            "flex items-center gap-1.5",
-            // hide ONLY on small screens while bulk panel is open
-            bulkMoveOpen ? "hidden sm:flex" : ""
+            "flex items-center gap-1.5 min-w-0",          // allow children to shrink
+            "flex-1",                                     // claim the middle space
+            bulkMoveOpen ? "hidden sm:flex" : ""          // current mobile logic
           ].join(" ")}
         >
           <Button variant="outline" size="icon" onClick={prevDay} aria-label="Previous day">←</Button>
-          <DatePicker value={date} onChange={setDate} />
+
+          {/* Wrap the DatePicker so we can size it responsively */}
+          <div className="min-w-0 w-auto sm:flex-1">      {/* full width from sm+ */}
+            <DatePicker value={date} onChange={setDate} className="w-full" />
+          </div>
+
           <Button variant="outline" size="icon" onClick={nextDay} aria-label="Next day">→</Button>
           <Button variant="outline" onClick={today} className="hidden sm:inline-flex">Today</Button>
         </div>
 
-        {/* Bulk-move controls */}
+        {/* Right: bulk move controls */}
         <div
           className={[
-            "flex items-center gap-1.5",
+            "flex items-center gap-1.5 shrink-0",         // don't let this stretch the row
             // default pushes right; on mobile while open, take the left slot
             bulkMoveOpen ? "ml-0 w-full justify-start sm:ml-auto sm:w-auto" : "ml-auto"
           ].join(" ")}
         >
           {dayjs(date).format("YYYY-MM-DD") !== dayjs().format("YYYY-MM-DD") && (
-            <Button variant="outline" onClick={bulkMoveToToday} disabled={bulkBusy}>
+            <Button
+              variant="outline"
+              onClick={bulkMoveToToday}
+              disabled={bulkBusy}
+              className="h-9 px-3 text-xs sm:h-10 sm:px-4 sm:text-sm"   // smaller on mobile
+            >
               <span className="sm:hidden">Move to today</span>
               <span className="hidden sm:inline">Move all to today</span>
             </Button>
@@ -792,21 +823,32 @@ export default function Today() {
                 setBulkToDate(dayjs(date).format("YYYY-MM-DD"));
                 setBulkMoveOpen(true);
               }}
+              className="h-9 px-3 text-xs sm:h-10 sm:px-4 sm:text-sm"   // smaller on mobile
             >
-              Move all…
+              <span className="sm:hidden">Move…</span>
+              <span className="hidden sm:inline">Move all…</span>
             </Button>
           ) : (
             <div className="flex items-center gap-1.5">
-              <DatePicker value={bulkToDate} onChange={setBulkToDate} />
-              <Button onClick={() => bulkMove(bulkToDate)} disabled={bulkBusy}>Move</Button>
-              <Button variant="outline" onClick={() => setBulkMoveOpen(false)} disabled={bulkBusy}>
+              {/* keep this compact on mobile so it doesn't push offscreen */}
+              <div className="w-[9.5rem] sm:w-auto">
+                <DatePicker value={bulkToDate} onChange={setBulkToDate} className="w-full" />
+              </div>
+              <Button onClick={() => bulkMove(bulkToDate)} disabled={bulkBusy} className="h-9 px-3 text-xs sm:h-10 sm:px-4 sm:text-sm">
+                Move
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => setBulkMoveOpen(false)}
+                disabled={bulkBusy}
+                className="h-9 px-3 text-xs sm:h-10 sm:px-4 sm:text-sm"
+              >
                 Cancel
               </Button>
             </div>
           )}
         </div>
       </div>
-
       {loadingPlan && !planLoadedOnce ? null : (
         grouped.map(([groupName, rows]) => (
           <div key={groupName} className="space-y-3">
@@ -846,12 +888,8 @@ export default function Today() {
         />
       )}
 
-      {/* Birthday overlay */}
       {showBday && (
-        <BirthdayOverlay
-          message="Happy Birthday Jenn"
-          onClose={() => setShowBday(false)}
-        />
+        <BirthdayOverlay message="Happy Birthday Jenn" onClose={() => setShowBday(false)} />
       )}
     </div>
   );

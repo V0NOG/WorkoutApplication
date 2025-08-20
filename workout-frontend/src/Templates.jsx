@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
+// src/Templates.jsx
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
@@ -6,6 +7,7 @@ import { Label } from "./components/ui/label";
 import DatePicker from "./DatePicker.jsx";
 import { pingTemplatesChanged } from "./bus";
 import GroupCombo from "./components/GroupCombo.jsx";
+import { useToast } from "./App.jsx";
 
 const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
@@ -41,14 +43,11 @@ function DayPills({ value, onToggle }) {
   );
 }
 
-// UPDATED: container now w-full/min-w-0/overflow-hidden, buttons are flex-1 text-center
 function Segmented({ value, onChange, options, className = "" }) {
   return (
     <div
       className={[
-        // OLD LOOK (restored)
         "inline-flex h-10 items-center rounded-lg border border-input bg-muted px-1",
-        // containment without changing the look
         "max-w-full",
         className
       ].join(" ")}
@@ -61,7 +60,6 @@ function Segmented({ value, onChange, options, className = "" }) {
             type="button"
             onClick={() => onChange(v)}
             className={[
-              // OLD BUTTON LOOK (restored)
               "px-3 py-1.5 rounded-md text-sm font-medium transition",
               "whitespace-nowrap",
               active
@@ -81,13 +79,14 @@ function todayLocalISO() {
   const d = new Date();
   const off = d.getTimezoneOffset();
   const local = new Date(d.getTime() - off * 60 * 1000);
-  return local.toISOString().slice(0, 10); // YYYY-MM-DD in local time
+  return local.toISOString().slice(0, 10); // YYYY-MM-DD
 }
 
 export default function Templates() {
   const [list, setList] = useState([]);
+  const { push: toast } = useToast();
 
-  const [form, setForm] = useState({
+  const defaultForm = () => ({
     name: "",
     kind: "calisthenics",     // calisthenics | gym
     group: "",
@@ -95,12 +94,11 @@ export default function Templates() {
     dailyTarget: 200,         // Cali: daily target | Gym: # sets
     defaultSetSize: 20,       // Cali: set size      | Gym: # reps
     weight: "",               // Gym-only
-    // Default to weekdays only (Mon–Fri)
-    daysOfWeek: [1,2,3,4,5],
+    daysOfWeek: [1,2,3,4,5],  // Mon–Fri
     startDate: todayLocalISO(),
     endDate: "",
     // Progression & Deload
-    progMode: "volume",       // "volume" | "weight"
+    progMode: "volume",       // "volume" | "weight" (gym)
     weeklyPct: 0,
     cap: "",
     deloadEvery: 0,
@@ -110,6 +108,7 @@ export default function Templates() {
     showDeload: false,
   });
 
+  const [form, setForm] = useState(defaultForm());
   const [editingId, setEditingId] = useState(null);
   const [draft, setDraft] = useState(null);
 
@@ -117,10 +116,16 @@ export default function Templates() {
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const [deleting, setDeleting] = useState(false);
 
+  // ref to templates list (so we can scroll into view after create)
+  const listRef = useRef(null);
+
   function upd(k, v)  { setForm((p) => ({ ...p, [k]: v })); }
   function dset(k, v) { setDraft((p) => ({ ...p, [k]: v })); }
 
-  async function refresh() { setList(await api.listTemplates()); }
+  async function refresh() {
+    const data = await api.listTemplates();
+    setList(data);
+  }
   useEffect(() => { refresh(); }, []);
 
   useEffect(() => {
@@ -134,45 +139,70 @@ export default function Templates() {
   }, [list]);
 
   async function create() {
-    const weeklyPct   = form.showProg    ? (Number(form.weeklyPct) || 0) : 0;
-    const capVal      = form.showProg    ? (form.cap ? Number(form.cap) : null) : null;
-    const deloadEvery = form.showDeload  ? (Number(form.deloadEvery) || 0) : 0;
-    const deloadScale = form.showDeload  ? (Number(form.deloadScale) || 0.7) : 0.7;
+    try {
+      const weeklyPct   = form.showProg    ? (Number(form.weeklyPct) || 0) : 0;
+      const capVal      = form.showProg    ? (form.cap ? Number(form.cap) : null) : null;
+      const deloadEvery = form.showDeload  ? (Number(form.deloadEvery) || 0) : 0;
+      const deloadScale = form.showDeload  ? (Number(form.deloadScale) || 0.7) : 0.7;
 
-    const payload = {
-      name: form.name,
-      kind: form.kind,
-      group: (form.group || "").trim(),
-      unit: form.unit,
-      dailyTarget: Number(form.dailyTarget),
-      defaultSetSize: Number(form.defaultSetSize),
-      ...(form.kind === "gym" && {
-        weight: form.weight === "" ? null : Number(form.weight),
-      }),
-      schedule: {
-        type: "weekly",
-        daysOfWeek: form.daysOfWeek,
-        startDate: form.startDate || new Date().toISOString().slice(0,10),
-        endDate: form.endDate || null,
-      },
-      progression: {
-        mode: form.progMode,
-        weeklyPct,
-        cap: capVal,
-      },
-      deloadRule: {
-        mode: form.progMode,
-        everyNWeeks: deloadEvery,
-        scale: deloadScale,
-      },
-    };
-    await api.createTemplate(payload);
-    pingTemplatesChanged();
-    setForm((p) => ({ ...p, name: "" }));
-    refresh();
+      const payload = {
+        name: form.name.trim(),
+        kind: form.kind,
+        group: (form.group || "").trim(),
+        unit: form.unit,
+        dailyTarget: Number(form.dailyTarget),
+        defaultSetSize: Number(form.defaultSetSize),
+        ...(form.kind === "gym" && {
+          weight: form.weight === "" ? null : Number(form.weight),
+        }),
+        schedule: {
+          type: "weekly",
+          daysOfWeek: form.daysOfWeek,
+          startDate: form.startDate || new Date().toISOString().slice(0,10),
+          endDate: form.endDate || null,
+        },
+        progression: {
+          mode: form.progMode,
+          weeklyPct,
+          cap: capVal,
+        },
+        deloadRule: {
+          mode: form.progMode,
+          everyNWeeks: deloadEvery,
+          scale: deloadScale,
+        },
+      };
+
+      if (!payload.name) throw new Error("Please enter a name for the template.");
+
+      await api.createTemplate(payload);
+      pingTemplatesChanged();
+      await refresh();
+
+      // clear the form back to defaults
+      setForm(defaultForm());
+
+      // success toast
+      toast({
+        title: "Template created",
+        description: `“${payload.name}” was added${payload.group ? ` to ${payload.group}` : ""}.`,
+        variant: "success"
+      });
+
+      // ensure user sees the list top
+      requestAnimationFrame(() => {
+        listRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    } catch (e) {
+      toast({
+        title: "Could not create template",
+        description: e?.message || "Please check your inputs and try again.",
+        variant: "error"
+      });
+    }
   }
 
-  // Themed inline delete confirmation (replaces native confirm)
+  // Themed inline delete confirmation
   function askDelete(id) {
     setConfirmDeleteId(id);
   }
@@ -182,6 +212,13 @@ export default function Templates() {
       await api.deleteTemplate(id);
       pingTemplatesChanged();
       await refresh();
+      toast({ title: "Template deleted", variant: "success" });
+    } catch (e) {
+      toast({
+        title: "Delete failed",
+        description: e?.message || "Please try again.",
+        variant: "error"
+      });
     } finally {
       setDeleting(false);
       setConfirmDeleteId(null);
@@ -219,43 +256,50 @@ export default function Templates() {
   async function saveEdit() {
     if (!editingId || !draft) return;
 
-    const weeklyPct   = draft.showProg    ? (Number(draft.weeklyPct) || 0) : 0;
-    const capVal      = draft.showProg    ? (draft.cap === "" ? null : Number(draft.cap)) : null;
-    const deloadEvery = draft.showDeload  ? (Number(draft.deloadEvery) || 0) : 0;
-    const deloadScale = draft.showDeload  ? (Number(draft.deloadScale) || 0.7) : 0.7;
+    try {
+      const weeklyPct   = draft.showProg    ? (Number(draft.weeklyPct) || 0) : 0;
+      const capVal      = draft.showProg    ? (draft.cap === "" ? null : Number(draft.cap)) : null;
+      const deloadEvery = draft.showDeload  ? (Number(draft.deloadEvery) || 0) : 0;
+      const deloadScale = draft.showDeload  ? (Number(draft.deloadScale) || 0.7) : 0.7;
 
-    const payload = {
-      name: draft.name,
-      kind: draft.kind,
-      group: (draft.group || "").trim(),
-      unit: draft.unit,
-      dailyTarget: Number(draft.dailyTarget),
-      defaultSetSize: Number(draft.defaultSetSize),
-      ...(draft.kind === "gym" && {
-        weight: draft.weight === "" ? null : Number(draft.weight),
-      }),
-      schedule: {
-        type: "weekly",
-        daysOfWeek: draft.daysOfWeek,
-        startDate: draft.startDate || new Date().toISOString().slice(0,10),
-        endDate: draft.endDate || null,
-      },
-      progression: {
-        mode: draft.progMode,
-        weeklyPct,
-        cap: capVal,
-      },
-      deloadRule: {
-        mode: draft.progMode,
-        everyNWeeks: deloadEvery,
-        scale: deloadScale,
-      },
-    };
+      const payload = {
+        name: draft.name.trim(),
+        kind: draft.kind,
+        group: (draft.group || "").trim(),
+        unit: draft.unit,
+        dailyTarget: Number(draft.dailyTarget),
+        defaultSetSize: Number(draft.defaultSetSize),
+        ...(draft.kind === "gym" && {
+          weight: draft.weight === "" ? null : Number(draft.weight),
+        }),
+        schedule: {
+          type: "weekly",
+          daysOfWeek: draft.daysOfWeek,
+          startDate: draft.startDate || new Date().toISOString().slice(0,10),
+          endDate: draft.endDate || null,
+        },
+        progression: {
+          mode: draft.progMode,
+          weeklyPct,
+          cap: capVal,
+        },
+        deloadRule: {
+          mode: draft.progMode,
+          everyNWeeks: deloadEvery,
+          scale: deloadScale,
+        },
+      };
 
-    await api.updateTemplate(editingId, payload);
-    pingTemplatesChanged();
-    cancelEdit();
-    refresh();
+      if (!payload.name) throw new Error("Please enter a name for the template.");
+
+      await api.updateTemplate(editingId, payload);
+      pingTemplatesChanged();
+      cancelEdit();
+      await refresh();
+      toast({ title: "Changes saved", description: `Updated “${payload.name}”.`, variant: "success" });
+    } catch (e) {
+      toast({ title: "Save failed", description: e?.message || "Please try again.", variant: "error" });
+    }
   }
 
   const sorted = [...list].sort(
@@ -270,188 +314,8 @@ export default function Templates() {
 
   return (
     <div className="stack">
-      {/* Header: Kind + Group */}
-      <div className="card p-6">
-        <div className="grid grid-cols-12 gap-4 items-end">
-          {/* Title column: label spacer + h-11 row to align with inputs */}
-          <div className="col-span-12 md:col-span-3">
-            <div className="small text-muted-foreground h-5 select-none opacity-0">.</div>
-            <div className="h-11 flex items-center text-xl font-semibold">
-              New Template
-            </div>
-          </div>
-
-          {/* Type (segmented) */}
-          <div className="col-span-12 sm:col-span-4 md:col-span-3">
-            <div className="small text-muted-foreground h-5">Type</div>
-            <Segmented
-              className="text-base"  // slightly larger text in this header row
-              value={form.kind}
-              onChange={(k) => upd("kind", k)}
-              options={[
-                { value: "calisthenics", label: "Calisthenics" },
-                { value: "gym", label: "Gym" },
-              ]}
-            />
-          </div>
-
-          {/* Group (combo) */}
-          <div className="col-span-12 sm:col-span-5 md:col-span-6">
-            <div className="small text-muted-foreground h-5">Group (type to create or pick)</div>
-            <GroupCombo
-              options={groupOptions}
-              value={form.group}
-              onChange={(v) => upd("group", v)}
-              placeholder="Back Day, Push Day, Core…"
-              className="w-full"
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* Create form */}
-      <div className="card p-6 space-y-6">
-        {/* Name */}
-        <div>
-          <div className="small text-muted-foreground h-5">Name (e.g., Pull-ups / Bench Press)</div>
-          <Input className={inputClass} value={form.name} onChange={(e)=>upd("name", e.target.value)} />
-        </div>
-
-        {/* Targets (responsive + animated) */}
-        <div className="grid grid-cols-12 gap-4 items-end">
-          <div className={["col-span-12", isGym ? "md:col-span-4" : "md:col-span-6", "transition-all duration-300"].join(" ")}>
-            <div className="small text-muted-foreground h-5">
-              {isGym ? "Number of sets" : "Daily target"}
-            </div>
-            <Input className={inputClass} type="number" value={form.dailyTarget} onChange={(e)=>upd("dailyTarget", e.target.value)} />
-          </div>
-
-          <div className={["col-span-12", isGym ? "md:col-span-4" : "md:col-span-6", "transition-all duration-300"].join(" ")}>
-            <div className="small text-muted-foreground h-5">
-              {isGym ? "Number of reps (per set)" : "Preferred rep size"}
-            </div>
-            <Input className={inputClass} type="number" value={form.defaultSetSize} onChange={(e)=>upd("defaultSetSize", e.target.value)} />
-          </div>
-
-          {/* Weight only for gym; animates in/out */}
-          <div className={["col-span-12 transition-all duration-300", isGym ? "md:col-span-4 opacity-100" : "md:col-span-0 opacity-0 pointer-events-none h-0 overflow-hidden"].join(" ")}>
-            {isGym && (
-              <>
-                <div className="small text-muted-foreground h-5">Target weight (kg)</div>
-                <Input className={inputClass} type="number" placeholder="e.g., 40" value={form.weight} onChange={(e)=>upd("weight", e.target.value)} />
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* SCHEDULE ROW: Active days + Basis + Progression + Deload (inline, no wrap) */}
-        <div>
-          <div className="small text-muted-foreground h-5">Schedule</div>
-          <div className="grid grid-cols-12 gap-4 items-end">
-            {/* Active days */}
-            <div className="col-span-12 md:col-span-6 min-w-0">
-              <DayPills
-                value={form.daysOfWeek}
-                onToggle={(i)=>{
-                  const on = form.daysOfWeek.includes(i);
-                  upd("daysOfWeek", on ? form.daysOfWeek.filter(x=>x!==i) : [...form.daysOfWeek, i].sort());
-                }}
-              />
-            </div>
-
-            {/* Basis: render ONLY for gym to avoid phantom column; fits cell width */}
-            {isGym && (
-              <div className="col-span-12 md:col-span-2 min-w-0">
-                <div className="small text-muted-foreground h-5">Basis</div>
-                <Segmented
-                  value={form.progMode}
-                  onChange={(m)=>upd("progMode", m)}
-                  options={[
-                    { value: "volume", label: "Reps" },
-                    { value: "weight", label: "Weight" },
-                  ]}
-                />
-              </div>
-            )}
-
-            {/* Progression toggle */}
-            <div className={["col-span-6", isGym ? "md:col-span-2" : "md:col-span-3", "min-w-0"].join(" ")}>
-              <div className="small text-muted-foreground h-5">Progression</div>
-              <Segmented
-                value={form.showProg ? "on" : "off"}
-                onChange={(v)=>upd("showProg", v === "on")}
-                options={[
-                  { value: "off", label: "Hide" },
-                  { value: "on", label: "Show" },
-                ]}
-              />
-            </div>
-
-            {/* Deload toggle */}
-            <div className={["col-span-6", isGym ? "md:col-span-2" : "md:col-span-3", "min-w-0"].join(" ")}>
-              <div className="small text-muted-foreground h-5">Deload</div>
-              <Segmented
-                value={form.showDeload ? "on" : "off"}
-                onChange={(v)=>upd("showDeload", v === "on")}
-                options={[
-                  { value: "off", label: "Hide" },
-                  { value: "on", label: "Show" },
-                ]}
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Progression inputs */}
-        {form.showProg && (
-          <div className="grid grid-cols-12 gap-4 items-end">
-            <div className="col-span-12 md:col-span-6">
-              <div className="small text-muted-foreground h-5">Progression weekly % (0 disables)</div>
-              <Input className={inputClass} type="number" value={form.weeklyPct} onChange={(e)=>upd("weeklyPct", e.target.value)} />
-            </div>
-            <div className="col-span-12 md:col-span-6">
-              <div className="small text-muted-foreground h-5">Progression cap (optional)</div>
-              <Input className={inputClass} placeholder="e.g., 300" value={form.cap} onChange={(e)=>upd("cap", e.target.value)} />
-            </div>
-          </div>
-        )}
-
-        {/* Deload inputs */}
-        {form.showDeload && (
-          <div className="grid grid-cols-12 gap-4 items-end">
-            <div className="col-span-12 md:col-span-6">
-              <div className="small text-muted-foreground h-5">Deload every N weeks (0 disables)</div>
-              <Input className={inputClass} type="number" value={form.deloadEvery} onChange={(e)=>upd("deloadEvery", e.target.value)} />
-            </div>
-            <div className="col-span-12 md:col-span-6">
-              <div className="small text-muted-foreground h-5">Deload scale (e.g., 0.7 = 70%)</div>
-              <Input className={inputClass} type="number" step="0.05" value={form.deloadScale} onChange={(e)=>upd("deloadScale", e.target.value)} />
-            </div>
-          </div>
-        )}
-
-        {/* Schedule dates */}
-        <div className="grid grid-cols-12 gap-4 items-end">
-          <div className="col-span-12 md:col-span-6">
-            <div className="small text-muted-foreground h-5">Start date</div>
-            <DatePicker
-              value={form.startDate || todayLocalISO()}
-              onChange={(v)=>upd("startDate", v || todayLocalISO())}
-            />
-          </div>
-          <div className="col-span-12 md:col-span-6">
-            <div className="small text-muted-foreground h-5">End date (optional)</div>
-            <DatePicker value={form.endDate} onChange={(v)=>upd("endDate", v)} />
-          </div>
-        </div>
-
-        <div className="pt-1 sticky bottom-[calc(env(safe-area-inset-bottom)+8px)]">
-          <Button className="w-full h-11" onClick={create}>Create template</Button>
-        </div>
-      </div>
-
-      {/* List grouped by group */}
-      <div className="card p-0">
+      {/* ===== Templates List FIRST so new items are immediately visible ===== */}
+      <div ref={listRef} className="card p-0 mt-3">
         {sorted.length === 0 ? (
           <div className="p-6 small text-muted-foreground">No templates yet.</div>
         ) : (
@@ -548,13 +412,22 @@ export default function Templates() {
 
                     const gym = draft.kind === "gym";
                     return (
-                      <div key={t._id} className="p-4 md:p-5 space-y-5 bg-white/40 dark:bg-white/5">
+                      <div key={t._id} className="p-4 md:p-5 space-y-5">
                         <div className="grid grid-cols-12 gap-4 items-end">
                           <div className="col-span-12 sm:col-span-4">
                             <Label>Type</Label>
                             <Segmented
+                              className="text-base"
                               value={draft.kind}
-                              onChange={(k)=>dset("kind", k)}
+                              onChange={(k) => {
+                                if (k === "gym") {
+                                  dset("kind", "gym");
+                                  dset("dailyTarget", 5);
+                                } else {
+                                  dset("kind", "calisthenics");
+                                  dset("dailyTarget", 200);
+                                }
+                              }}
                               options={[
                                 { value: "calisthenics", label: "Calisthenics" },
                                 { value: "gym", label: "Gym" },
@@ -597,7 +470,7 @@ export default function Templates() {
                           </div>
                         </div>
 
-                        {/* SCHEDULE ROW (Edit): Active days + Basis + Progression + Deload */}
+                        {/* Schedule row (edit) */}
                         <div>
                           <Label>Schedule</Label>
                           <div className="grid grid-cols-12 gap-4 items-end mt-1.5">
@@ -651,7 +524,6 @@ export default function Templates() {
                           </div>
                         </div>
 
-                        {/* Progression inputs */}
                         {draft.showProg && (
                           <div className="grid grid-cols-12 gap-4 items-end">
                             <div className="col-span-12 md:col-span-6">
@@ -665,7 +537,6 @@ export default function Templates() {
                           </div>
                         )}
 
-                        {/* Deload inputs */}
                         {draft.showDeload && (
                           <div className="grid grid-cols-12 gap-4 items-end">
                             <div className="col-span-12 md:col-span-6">
@@ -691,6 +562,180 @@ export default function Templates() {
             </div>
           ))
         )}
+      </div>
+
+      {/* ===== New Template Form (below the list) ===== */}
+      <div className="card p-6 mt-4">
+        {/* Header: Kind + Group */}
+        <div className="grid grid-cols-12 gap-4 items-end">
+          <div className="col-span-12 md:col-span-3">
+            <div className="small text-muted-foreground h-5 select-none opacity-0">.</div>
+            <div className="h-11 flex items-center text-xl font-semibold">
+              New Template
+            </div>
+          </div>
+
+          <div className="col-span-12 sm:col-span-4 md:col-span-3">
+            <div className="small text-muted-foreground h-5">Type</div>
+            <Segmented
+              className="text-base"
+              value={form.kind}
+              onChange={(k) => {
+                if (k === "gym") {
+                  setForm((p) => ({ ...p, kind: "gym", dailyTarget: 5 }));
+                } else {
+                  setForm((p) => ({ ...p, kind: "calisthenics", dailyTarget: 200 }));
+                }
+              }}
+              options={[
+                { value: "calisthenics", label: "Calisthenics" },
+                { value: "gym", label: "Gym" },
+              ]}
+            />
+          </div>
+
+          <div className="col-span-12 sm:col-span-5 md:col-span-6">
+            <div className="small text-muted-foreground h-5">Group (type to create or pick)</div>
+            <GroupCombo
+              options={groupOptions}
+              value={form.group}
+              onChange={(v) => upd("group", v)}
+              placeholder="Back Day, Push Day, Core…"
+              className="w-full"
+            />
+          </div>
+        </div>
+
+        {/* Create form body */}
+        <div className="space-y-6 mt-6">
+          <div>
+            <div className="small text-muted-foreground h-5">Name (e.g., Pull-ups / Bench Press)</div>
+            <Input className={inputClass} value={form.name} onChange={(e)=>upd("name", e.target.value)} />
+          </div>
+
+          <div className="grid grid-cols-12 gap-4 items-end">
+            <div className={["col-span-12", isGym ? "md:col-span-4" : "md:col-span-6", "transition-all duration-300"].join(" ")}>
+              <div className="small text-muted-foreground h-5">
+                {isGym ? "Number of sets" : "Daily target"}
+              </div>
+              <Input className={inputClass} type="number" value={form.dailyTarget} onChange={(e)=>upd("dailyTarget", e.target.value)} />
+            </div>
+
+            <div className={["col-span-12", isGym ? "md:col-span-4" : "md:col-span-6", "transition-all duration-300"].join(" ")}>
+              <div className="small text-muted-foreground h-5">
+                {isGym ? "Number of reps (per set)" : "Preferred rep size"}
+              </div>
+              <Input className={inputClass} type="number" value={form.defaultSetSize} onChange={(e)=>upd("defaultSetSize", e.target.value)} />
+            </div>
+
+            <div className={["col-span-12 transition-all duration-300", isGym ? "md:col-span-4 opacity-100" : "md:col-span-0 opacity-0 pointer-events-none h-0 overflow-hidden"].join(" ")}>
+              {isGym && (
+                <>
+                  <div className="small text-muted-foreground h-5">Target weight (kg)</div>
+                  <Input className={inputClass} type="number" placeholder="e.g., 40" value={form.weight} onChange={(e)=>upd("weight", e.target.value)} />
+                </>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <div className="small text-muted-foreground h-5">Schedule</div>
+            <div className="grid grid-cols-12 gap-4 items-end">
+              <div className="col-span-12 md:col-span-6 min-w-0">
+                <DayPills
+                  value={form.daysOfWeek}
+                  onToggle={(i)=>{
+                    const on = form.daysOfWeek.includes(i);
+                    upd("daysOfWeek", on ? form.daysOfWeek.filter(x=>x!==i) : [...form.daysOfWeek, i].sort());
+                  }}
+                />
+              </div>
+
+              {isGym && (
+                <div className="col-span-12 md:col-span-2 min-w-0">
+                  <div className="small text-muted-foreground h-5">Basis</div>
+                  <Segmented
+                    value={form.progMode}
+                    onChange={(m)=>upd("progMode", m)}
+                    options={[
+                      { value: "volume", label: "Reps" },
+                      { value: "weight", label: "Weight" },
+                    ]}
+                  />
+                </div>
+              )}
+
+              <div className={["col-span-6", isGym ? "md:col-span-2" : "md:col-span-3", "min-w-0"].join(" ")}>
+                <div className="small text-muted-foreground h-5">Progression</div>
+                <Segmented
+                  value={form.showProg ? "on" : "off"}
+                  onChange={(v)=>upd("showProg", v === "on")}
+                  options={[
+                    { value: "off", label: "Hide" },
+                    { value: "on", label: "Show" },
+                  ]}
+                />
+              </div>
+
+              <div className={["col-span-6", isGym ? "md:col-span-2" : "md:col-span-3", "min-w-0"].join(" ")}>
+                <div className="small text-muted-foreground h-5">Deload</div>
+                <Segmented
+                  value={form.showDeload ? "on" : "off"}
+                  onChange={(v)=>upd("showDeload", v === "on")}
+                  options={[
+                    { value: "off", label: "Hide" },
+                    { value: "on", label: "Show" },
+                  ]}
+                />
+              </div>
+            </div>
+          </div>
+
+          {form.showProg && (
+            <div className="grid grid-cols-12 gap-4 items-end">
+              <div className="col-span-12 md:col-span-6">
+                <div className="small text-muted-foreground h-5">Progression weekly % (0 disables)</div>
+                <Input className={inputClass} type="number" value={form.weeklyPct} onChange={(e)=>upd("weeklyPct", e.target.value)} />
+              </div>
+              <div className="col-span-12 md:col-span-6">
+                <div className="small text-muted-foreground h-5">Progression cap (optional)</div>
+                <Input className={inputClass} placeholder="e.g., 300" value={form.cap} onChange={(e)=>upd("cap", e.target.value)} />
+              </div>
+            </div>
+          )}
+
+          {form.showDeload && (
+            <div className="grid grid-cols-12 gap-4 items-end">
+              <div className="col-span-12 md:col-span-6">
+                <div className="small text-muted-foreground h-5">Deload every N weeks (0 disables)</div>
+                <Input className={inputClass} type="number" value={form.deloadEvery} onChange={(e)=>upd("deloadEvery", e.target.value)} />
+              </div>
+              <div className="col-span-12 md:col-span-6">
+                <div className="small text-muted-foreground h-5">Deload scale (e.g., 0.7 = 70%)</div>
+                <Input className={inputClass} type="number" step="0.05" value={form.deloadScale} onChange={(e)=>upd("deloadScale", e.target.value)} />
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-12 gap-4 items-end">
+            <div className="col-span-12 md:col-span-6">
+              <div className="small text-muted-foreground h-5">Start date</div>
+              <DatePicker
+                value={form.startDate || todayLocalISO()}
+                onChange={(v)=>upd("startDate", v || todayLocalISO())}
+              />
+            </div>
+            <div className="col-span-12 md:col-span-6">
+              <div className="small text-muted-foreground h-5">End date (optional)</div>
+              <DatePicker value={form.endDate} onChange={(v)=>upd("endDate", v)} />
+            </div>
+          </div>
+
+          {/* Not sticky anymore — scrolls with the card */}
+          <div className="pt-1">
+            <Button className="w-full h-11" onClick={create}>Create template</Button>
+          </div>
+        </div>
       </div>
     </div>
   );

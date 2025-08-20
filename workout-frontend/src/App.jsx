@@ -13,9 +13,9 @@ import ThemeToggle from "./components/ThemeToggle.jsx";
 /* =========================================================
    Minimal themed toast system
    ========================================================= */
-const ToastCtx = createContext({ push: () => {}, remove: () => {} });
+export const ToastCtx = createContext({ push: () => {}, remove: () => {} });
 
-function ToastProvider({ children }) {
+export function ToastProvider({ children }) {
   const [items, setItems] = useState([]);
   function push({ title, description = "", variant = "info", duration = 3800 }) {
     const id = Math.random().toString(36).slice(2);
@@ -31,7 +31,7 @@ function ToastProvider({ children }) {
     </ToastCtx.Provider>
   );
 }
-function useToast() { return useContext(ToastCtx); }
+export function useToast() { return useContext(ToastCtx); }
 function ToastViewport({ items, onClose }) {
   return (
     <>
