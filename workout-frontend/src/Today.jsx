@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import dayjs from "dayjs";
 import { api } from "./api";
 import { Button } from "./components/ui/button";
@@ -20,39 +20,30 @@ function useDebouncedEffect(fn, deps, delay = 500) {
 
 // --- Birthday helpers ---
 function getBrowserTimeZone() {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-  } catch {
-    return "UTC";
-  }
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; }
+  catch { return "UTC"; }
 }
-
 function isMonthDayInTz(tz, mm = "08", dd = "16") {
   try {
     const parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone: tz,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
+      timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
     }).formatToParts(new Date());
     const month = parts.find(p => p.type === "month")?.value || "";
     const day = parts.find(p => p.type === "day")?.value || "";
     return month === mm && day === dd;
   } catch {
-    // Fallback to browser local time if anything goes wrong
     const now = new Date();
     const m = String(now.getMonth() + 1).padStart(2, "0");
     const d = String(now.getDate()).padStart(2, "0");
     return m === mm && d === dd;
   }
 }
-
 function bdayTestOverride() {
   try {
     const qs = new URLSearchParams(window.location.search);
-    if (qs.get('bday') === '1') return true;                  // ?bday=1
-    if (localStorage.getItem('bday-test') === '1') return true; // set once, persists
-    if (import.meta.env.VITE_BDAY_TEST === '1') return true;    // env toggle
+    if (qs.get('bday') === '1') return true;
+    if (localStorage.getItem('bday-test') === '1') return true;
+    if (import.meta.env.VITE_BDAY_TEST === '1') return true;
   } catch {}
   return false;
 }
@@ -128,12 +119,6 @@ function MetricsCard({ date }) {
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem("metricsCollapsed") === "true"
   );
-
-  const handleToggle = (v) => {
-    const next = !v; // because checked means “shown”
-    setCollapsed(next);
-    localStorage.setItem("metricsCollapsed", next);
-  };
 
   // load data...
   useEffect(() => {
@@ -311,7 +296,7 @@ function TaskCard({ item, onChanged }) {
   async function completeSet() {
     const nextIndex = (item.setsDone?.length ?? 0);
     const size = looksLikeSizes
-      ? ((planned[nextIndex] ?? repsPerSet) || 10)  // parens fix precedence
+      ? ((planned[nextIndex] ?? repsPerSet) || 10)
       : (repsPerSet || 10);
     await api.completeSet(item._id, size);
     await onChanged();
@@ -336,7 +321,7 @@ function TaskCard({ item, onChanged }) {
 
   const nextIndex = (item.setsDone?.length ?? 0);
   const nextSetSize = looksLikeSizes
-    ? ((planned[nextIndex] ?? repsPerSet) || 10)  // parens fix precedence
+    ? ((planned[nextIndex] ?? repsPerSet) || 10)
     : (repsPerSet || 10);
 
   // "Planned sets" display: list sizes when we have sizes, or just the count otherwise
@@ -499,14 +484,28 @@ function TaskCard({ item, onChanged }) {
   );
 }
 
-// --- helper: is a template active on a date? ---
+/** Robust: is a template active on a date?
+ *  - Accepts daysOfWeek as 0–6 (Sun..Sat) OR 1–7 (Mon..Sun)
+ *  - Supports type "weekly" (default) and treats others as “always” unless start/end exclude.
+ */
 function isActiveOnDate(tpl, dateStr) {
   const d = dayjs(dateStr);
   const startOk = !tpl.schedule?.startDate || !d.isBefore(dayjs(tpl.schedule.startDate), "day");
   const endOk = !tpl.schedule?.endDate || !d.isAfter(dayjs(tpl.schedule.endDate), "day");
+  if (!startOk || !endOk) return false;
+
   const type = tpl.schedule?.type || "weekly";
-  const dowOk = type === "weekly" ? (tpl.schedule?.daysOfWeek || []).includes(d.day()) : false;
-  return startOk && endOk && dowOk;
+  if (type !== "weekly") return true; // non-weekly => show throughout window
+
+  const raw = tpl.schedule?.daysOfWeek ?? [];
+  const nums = raw.map((n) => Number(n)).filter((n) => Number.isFinite(n));
+
+  // dayjs: 0=Sun..6=Sat
+  const sun0 = d.day(); // 0..6
+  const mon1 = ((sun0 + 6) % 7) + 1; // 1..7
+
+  // Support either scheme
+  return nums.includes(sun0) || nums.includes(mon1);
 }
 
 function Segmented({ value, onChange, options, className = "" }) {
@@ -552,6 +551,9 @@ export default function Today() {
   const [statusByDate, setStatusByDate] = useState({});
   const [groupsByDate, setGroupsByDate] = useState({});
 
+  // keep templates so we can compute recurring group pills
+  const [templates, setTemplates] = useState([]);
+
   // Bulk move (whole-day)
   const [bulkMoveOpen, setBulkMoveOpen] = useState(false);
   const [bulkToDate, setBulkToDate] = useState(dayjs().format("YYYY-MM-DD"));
@@ -564,7 +566,7 @@ export default function Today() {
   // Called after a single item is moved.
   const handleItemChanged = async ({ from, to, jumpTo } = {}) => {
     await loadPlan(date);
-    await loadMonthStatus(visibleMonth);
+    await loadRollingCalendarData(visibleMonth); // recompute 3-month window
     if (jumpTo && to) setDate(to);
   };
 
@@ -579,40 +581,82 @@ export default function Today() {
     }
   }
 
-  async function loadMonthStatus(m = visibleMonth) {
-    const from = m.startOf("month").format("YYYY-MM-DD");
-    const to   = m.endOf("month").format("YYYY-MM-DD");
+  async function loadTemplates() {
+    try {
+      const tpl = (await api.getTemplates?.()) ?? (await api.templates?.list?.()) ?? [];
+      setTemplates(Array.isArray(tpl) ? tpl : []);
+    } catch {
+      setTemplates([]);
+    }
+  }
+
+  /** Compute groups/status for a rolling window covering the visible month
+   *  PLUS the next 3 months (and their spillover weeks).
+   */
+  async function loadRollingCalendarData(anchorMonth = visibleMonth, monthsAhead = 3) {
+    // Start at the first cell of the anchor month’s 42-cell grid
+    const startOfMonth = anchorMonth.startOf("month");
+    const gridStart = startOfMonth.subtract(startOfMonth.day(), "day");
+
+    // End at the last cell of the grid for (anchor + monthsAhead)
+    const endMonth = anchorMonth.add(monthsAhead, "month").endOf("month");
+    const gridEnd = endMonth.add(6 - endMonth.day(), "day");
+
+    const from = gridStart.format("YYYY-MM-DD");
+    const to   = gridEnd.format("YYYY-MM-DD");
+
     const s    = await api.statsSummary(from, to);
 
-    // Heatmap color states
+    // Only color TODAY; everything else neutral
+    const todayStr = dayjs().format("YYYY-MM-DD");
     const statusMap = {};
     for (const d of s?.days ?? []) {
-      const done   = Number(d?.done ?? 0);
-      const target = Number(d?.target ?? 0);
-      let status = "none";
-      if (target > 0) {
-        if (done >= target) status = "done";
-        else if (done > 0) status = "partial";
-        else status = "missed";
-      } else if (done > 0) {
-        status = "partial";
+      if (d.date === todayStr) {
+        const done   = Number(d?.done ?? 0);
+        const target = Number(d?.target ?? 0);
+        let status = "none";
+        if (target > 0) {
+          if (done >= target) status = "done";
+          else if (done > 0) status = "partial";
+          else status = "missed";
+        } else if (done > 0) {
+          status = "partial";
+        }
+        statusMap[d.date] = status;
+      } else {
+        statusMap[d.date] = "none";
       }
-      statusMap[d.date] = status;
     }
     setStatusByDate(statusMap);
 
-    // Groups come straight from the API now (includes moved items)
+    // Start with whatever groups the API already gave us
     const gmap = {};
     for (const d of s?.days ?? []) {
-      if (Array.isArray(d.groups) && d.groups.length) {
-        gmap[d.date] = d.groups;
+      gmap[d.date] = Array.isArray(d.groups) ? [...new Set(d.groups)] : [];
+    }
+
+    // Merge recurring template groups across the whole rolling window
+    const tplList = Array.isArray(templates) ? templates : [];
+    if (tplList.length) {
+      let cursor = gridStart;
+      while (!cursor.isAfter(gridEnd, "day")) {
+        const ds = cursor.format("YYYY-MM-DD");
+        const set = new Set(gmap[ds] || []);
+        for (const tpl of tplList) {
+          const grp = (tpl.group || tpl?.name || "").trim();
+          if (!grp) continue;
+          if (isActiveOnDate(tpl, ds)) set.add(grp);
+        }
+        gmap[ds] = Array.from(set);
+        cursor = cursor.add(1, "day");
       }
     }
+
     setGroupsByDate(gmap);
   }
 
   async function refreshAll(d = date) {
-    await Promise.all([loadPlan(d), loadMonthStatus(visibleMonth)]);
+    await Promise.all([loadPlan(d), loadRollingCalendarData(visibleMonth)]);
   }
 
   // bulk move actions
@@ -633,7 +677,12 @@ export default function Today() {
   }
 
   useEffect(() => { loadPlan(date); setVisibleMonth(dayjs(date)); }, [date]);
-  useEffect(() => { loadMonthStatus(visibleMonth); }, [visibleMonth]);
+
+  // Recompute data when the visible month OR templates change
+  useEffect(() => { loadRollingCalendarData(visibleMonth); }, [visibleMonth, templates]);
+
+  // Load templates once
+  useEffect(() => { loadTemplates(); }, []);
 
   // birthday check on mount (uses browser timezone)
   useEffect(() => {
@@ -672,7 +721,12 @@ export default function Today() {
   }, []);
 
   useEffect(() => {
-    const handler = () => { (async () => { await Promise.all([loadPlan(date), loadMonthStatus(visibleMonth)]); })(); };
+    const handler = () => {
+      (async () => {
+        await Promise.all([loadPlan(date), loadRollingCalendarData(visibleMonth)]);
+        await loadTemplates();
+      })();
+    };
     appBus.addEventListener("templates:changed", handler);
     const onStorage = (e) => { if (e.key === "templates:changed") handler(); };
     window.addEventListener("storage", onStorage);
@@ -684,6 +738,7 @@ export default function Today() {
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [date, visibleMonth]);
+
 
   function prevDay() { setDate(dayjs(date).subtract(1, "day").format("YYYY-MM-DD")); }
   function nextDay() { setDate(dayjs(date).add(1, "day").format("YYYY-MM-DD")); }
