@@ -1,0 +1,22 @@
+# Secrets
+.env
+.env.*
+workout-backend/.env
+backend/.env
+frontend/.env
+
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Builds
+dist/
+build/
+
+# OS / logs / temp
+.DS_Store
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
