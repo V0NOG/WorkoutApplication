@@ -9,6 +9,7 @@ import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
+import webpush from 'web-push';
 
 const app = express();
 app.use(helmet());
@@ -35,6 +36,18 @@ async function connectMongo() {
 }
 await connectMongo();
 
+// --- Web Push ---
+if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
+  console.warn('⚠️ Missing VAPID keys — push notifications will be disabled.');
+} else {
+  webpush.setVapidDetails(
+    process.env.WEB_PUSH_CONTACT || 'mailto:admin@example.com',
+    process.env.VAPID_PUBLIC_KEY,
+    process.env.VAPID_PRIVATE_KEY
+  );
+}
+
+
 // --- Models ---
 const UserSchema = new mongoose.Schema({
   email: { type: String, unique: true },
@@ -46,7 +59,33 @@ const UserSchema = new mongoose.Schema({
   reset: {
     tokenHash: String,
     expiresAt: Date
-  }
+  },
+  prefs: {
+    type: {
+      notifications: {
+        workout: {
+          enabled: { type: Boolean, default: false },
+          scheduleMode: { type: String, enum: ['times','interval'], default: 'times' },
+          times: { type: [String], default: ['18:00'] },  // "HH:mm" local to user tz
+          intervalMinutes: { type: Number, default: 180 },
+          windowStart: { type: String, default: '08:00' },
+          windowEnd: { type: String, default: '21:00' }
+        },
+        water: {
+          enabled: { type: Boolean, default: false },
+          showCard: { type: Boolean, default: false },
+          dailyGoalMl: { type: Number, default: 2000 },
+          scheduleMode: { type: String, enum: ['times','interval'], default: 'interval' },
+          times: { type: [String], default: [] },
+          intervalMinutes: { type: Number, default: 120 },
+          windowStart: { type: String, default: '08:00' },
+          windowEnd: { type: String, default: '21:00' }
+        }
+      }
+    },
+    default: {}
+  },
+  pushSubs: { type: [mongoose.Schema.Types.Mixed], default: [] }
 }, { timestamps: true });
 
 const TaskTemplateSchema = new mongoose.Schema({
@@ -117,6 +156,8 @@ const DailyMetricSchema = new mongoose.Schema({
   date: { type: String },              // 'YYYY-MM-DD'
   weightKg: { type: Number, default: null },
   heightCm: { type: Number, default: null },
+  waterMl: { type: Number, default: 0 },
+  waterGoalMl: { type: Number, default: null },
 }, { timestamps: true });
 DailyMetricSchema.index({ userId: 1, date: 1 }, { unique: true });
 
@@ -127,6 +168,15 @@ const DailyInstance = mongoose.model('DailyInstance', DailyInstanceSchema);
 
 const ACCESS_TTL = '15m';
 const REFRESH_TTL_DAYS = 7;
+
+const NotifyStateSchema = new mongoose.Schema({
+  userId: { type: mongoose.Types.ObjectId, ref: 'User' },
+  kind: { type: String, enum: ['workout','water'] },
+  date: { type: String },            // 'YYYY-MM-DD' in user's tz
+  sentKeys: { type: [String], default: [] } // e.g. ['18:00', '12:00', 'int:13:00']
+}, { timestamps: true });
+NotifyStateSchema.index({ userId:1, kind:1, date:1 }, { unique: true });
+const NotifyState = mongoose.model('NotifyState', NotifyStateSchema);
 
 // --- Auth middleware ---
 function auth(req, res, next) {
