@@ -8,6 +8,12 @@ import DatePicker from "./DatePicker.jsx";
 import { pingTemplatesChanged } from "./bus";
 import GroupCombo from "./components/GroupCombo.jsx";
 import { useToast } from "./App.jsx";
+import {
+  BLOCK_TYPES,
+  defaultAutoSessionSettings,
+  generateSessionBlocks,
+  normalizeSessionBlocks,
+} from "./lib/sessionBlocks.js";
 
 const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
@@ -158,6 +164,160 @@ function summarizeWeightPattern(t) {
   }
 }
 
+function TimedSessionSection({ value, onPatch, template }) {
+  const blocks = normalizeSessionBlocks(value.sessionBlocks || []);
+  const settings = { ...defaultAutoSessionSettings, ...(value.autoSessionSettings || {}) };
+  const shown = !!value.showTimed;
+
+  function patchSettings(next) {
+    onPatch({ autoSessionSettings: { ...settings, ...next } });
+  }
+  function patchBlock(index, patch) {
+    const next = blocks.map((block, i) => (i === index ? { ...block, ...patch } : block));
+    onPatch({ sessionBlocks: normalizeSessionBlocks(next) });
+  }
+  function addBlock(type = "exercise") {
+    onPatch({
+      sessionBlocks: normalizeSessionBlocks([
+        ...blocks,
+        { type, name: type === "rest" ? "Rest" : template.name || "Exercise", durationSec: type === "rest" ? 45 : 60, targetReps: type === "exercise" ? template.defaultSetSize || 10 : null },
+      ]),
+    });
+  }
+  function removeBlock(index) {
+    onPatch({ sessionBlocks: normalizeSessionBlocks(blocks.filter((_, i) => i !== index)) });
+  }
+  function moveBlock(index, dir) {
+    const next = blocks.slice();
+    const target = index + dir;
+    if (target < 0 || target >= next.length) return;
+    [next[index], next[target]] = [next[target], next[index]];
+    onPatch({ sessionBlocks: normalizeSessionBlocks(next.map((block, order) => ({ ...block, order }))) });
+  }
+  function generate() {
+    onPatch({
+      sessionMode: "automatic",
+      sessionBlocks: generateSessionBlocks(template, settings),
+    });
+  }
+
+  return (
+    <div className="rounded-xl border border-border p-3 space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="font-semibold">Timed Session</div>
+          <div className="small">Optional guided workout blocks for the player.</div>
+        </div>
+        <Segmented
+          value={shown ? "show" : "hide"}
+          onChange={(v) => onPatch({ showTimed: v === "show" })}
+          options={[
+            { value: "hide", label: "Hide" },
+            { value: "show", label: "Show" },
+          ]}
+        />
+      </div>
+
+      {shown && (
+        <>
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <SmallLabel>Mode</SmallLabel>
+              <Segmented
+                value={value.sessionMode || "manual"}
+                onChange={(sessionMode) => onPatch({ sessionMode })}
+                options={[
+                  { value: "manual", label: "Manual" },
+                  { value: "automatic", label: "Automatic" },
+                ]}
+              />
+            </div>
+            <div className="w-32">
+              <SmallLabel>Minutes</SmallLabel>
+              <NumericInput
+                className={inputClass}
+                value={settings.workoutDurationMin}
+                onChange={(e) => patchSettings({ workoutDurationMin: e.target.value })}
+              />
+            </div>
+            <div>
+              <SmallLabel>Level</SmallLabel>
+              <select
+                className={inputClass + " px-3"}
+                value={settings.fitnessLevel}
+                onChange={(e) => patchSettings({ fitnessLevel: e.target.value })}
+              >
+                <option value="beginner">Beginner</option>
+                <option value="intermediate">Intermediate</option>
+                <option value="advanced">Advanced</option>
+              </select>
+            </div>
+            <div>
+              <SmallLabel>Rest</SmallLabel>
+              <select
+                className={inputClass + " px-3"}
+                value={settings.restStyle}
+                onChange={(e) => patchSettings({ restStyle: e.target.value })}
+              >
+                <option value="short">Short</option>
+                <option value="standard">Standard</option>
+                <option value="long">Long</option>
+              </select>
+            </div>
+            <label className="inline-flex h-11 items-center gap-2 small text-foreground">
+              <input type="checkbox" checked={!!settings.includeWarmup} onChange={(e) => patchSettings({ includeWarmup: e.target.checked })} />
+              Warmup
+            </label>
+            <label className="inline-flex h-11 items-center gap-2 small text-foreground">
+              <input type="checkbox" checked={!!settings.includeCooldown} onChange={(e) => patchSettings({ includeCooldown: e.target.checked })} />
+              Cooldown
+            </label>
+            <Button variant="outline" onClick={generate}>Generate/update blocks</Button>
+          </div>
+
+          <div className="space-y-2">
+            {blocks.map((block, index) => (
+              <div key={index} className="grid grid-cols-12 gap-2 items-end rounded-lg border border-border bg-background p-2">
+                <div className="col-span-12 sm:col-span-2">
+                  <SmallLabel>Type</SmallLabel>
+                  <select className={inputClass + " px-2"} value={block.type} onChange={(e) => patchBlock(index, { type: e.target.value })}>
+                    {BLOCK_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+                  </select>
+                </div>
+                <div className="col-span-12 sm:col-span-4">
+                  <SmallLabel>Name</SmallLabel>
+                  <Input className={inputClass} value={block.name} onChange={(e) => patchBlock(index, { name: e.target.value })} />
+                </div>
+                <div className="col-span-6 sm:col-span-2">
+                  <SmallLabel>Seconds</SmallLabel>
+                  <NumericInput className={inputClass} value={block.durationSec} onChange={(e) => patchBlock(index, { durationSec: e.target.value })} />
+                </div>
+                <div className="col-span-6 sm:col-span-2">
+                  <SmallLabel>Reps</SmallLabel>
+                  <NumericInput className={inputClass} value={block.targetReps ?? ""} onChange={(e) => patchBlock(index, { targetReps: e.target.value })} />
+                </div>
+                <div className="col-span-12 sm:col-span-2 flex gap-1">
+                  <Button variant="outline" size="sm" onClick={() => moveBlock(index, -1)} disabled={index === 0}>Up</Button>
+                  <Button variant="outline" size="sm" onClick={() => moveBlock(index, 1)} disabled={index === blocks.length - 1}>Down</Button>
+                  <Button variant="outline" size="sm" onClick={() => removeBlock(index)}>Remove</Button>
+                </div>
+              </div>
+            ))}
+            {!blocks.length && <div className="small text-muted-foreground">No blocks yet. Generate or add one manually.</div>}
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={() => addBlock("exercise")}>Add exercise</Button>
+            <Button variant="outline" onClick={() => addBlock("rest")}>Add rest</Button>
+            <Button variant="outline" onClick={() => addBlock("warmup")}>Add warmup</Button>
+            <Button variant="outline" onClick={() => addBlock("cooldown")}>Add cooldown</Button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function Templates() {
   const [list, setList] = useState([]);
   const { push: toast } = useToast();
@@ -182,6 +342,10 @@ export default function Templates() {
     showDeload: false,
     // UI state for weight pattern. _stepManual is UI-only; not sent to API.
     weightPattern: { mode: "fixed", start: "", end: "", step: "", perSet: "", _stepManual: false },
+    showTimed: false,
+    sessionMode: "manual",
+    sessionBlocks: [],
+    autoSessionSettings: { ...defaultAutoSessionSettings },
   });
 
   const [form, setForm] = useState(defaultForm());
@@ -284,6 +448,9 @@ export default function Templates() {
         },
         progression: { mode: form.progMode, weeklyPct, cap: capVal },
         deloadRule: { mode: form.progMode, everyNWeeks: deloadEvery, scale: deloadScale },
+        sessionMode: form.sessionMode || "manual",
+        sessionBlocks: normalizeSessionBlocks(form.sessionBlocks),
+        autoSessionSettings: { ...defaultAutoSessionSettings, ...(form.autoSessionSettings || {}) },
       };
 
       if (!payload.name) throw new Error("Please enter a name for the template.");
@@ -351,6 +518,10 @@ export default function Templates() {
       deloadScale: t.deloadRule?.scale ?? 0.7,
       showProg: hasProg,
       showDeload: hasDeload,
+      showTimed: (t.sessionBlocks || []).length > 0 || t.sessionMode === "automatic",
+      sessionMode: t.sessionMode || "manual",
+      sessionBlocks: normalizeSessionBlocks(t.sessionBlocks || []),
+      autoSessionSettings: { ...defaultAutoSessionSettings, ...(t.autoSessionSettings || {}) },
       // include UI-only _stepManual flag default false
       weightPattern: {
         mode: t.weightPattern?.mode || 'fixed',
@@ -403,6 +574,9 @@ export default function Templates() {
         },
         progression: { mode: draft.progMode, weeklyPct, cap: capVal },
         deloadRule: { mode: draft.progMode, everyNWeeks: deloadEvery, scale: deloadScale },
+        sessionMode: draft.sessionMode || "manual",
+        sessionBlocks: normalizeSessionBlocks(draft.sessionBlocks),
+        autoSessionSettings: { ...defaultAutoSessionSettings, ...(draft.autoSessionSettings || {}) },
       };
 
       if (!payload.name) throw new Error("Please enter a name for the template.");
@@ -766,6 +940,17 @@ export default function Templates() {
                           </div>
                         )}
 
+                        <TimedSessionSection
+                          value={draft}
+                          onPatch={(patch) => setDraft((p) => ({ ...p, ...patch }))}
+                          template={{
+                            name: draft.name,
+                            kind: draft.kind,
+                            dailyTarget: draft.dailyTarget,
+                            defaultSetSize: draft.defaultSetSize,
+                          }}
+                        />
+
                         <div className="flex justify-end gap-2">
                           <Button variant="outline" onClick={cancelEdit}>Cancel</Button>
                           <Button onClick={saveEdit}>Save</Button>
@@ -1027,6 +1212,17 @@ export default function Templates() {
               </div>
             </div>
           )}
+
+          <TimedSessionSection
+            value={form}
+            onPatch={(patch) => setForm((p) => ({ ...p, ...patch }))}
+            template={{
+              name: form.name,
+              kind: form.kind,
+              dailyTarget: form.dailyTarget,
+              defaultSetSize: form.defaultSetSize,
+            }}
+          />
 
           <div className="grid grid-cols-12 gap-4 items-end">
             <div className="col-span-12 md:col-span-6">

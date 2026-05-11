@@ -104,6 +104,23 @@ const EMPTY = {
   days: [],
 };
 
+const EMPTY_SESSION_SUMMARY = {
+  completedSessions: 0,
+  cancelledSessions: 0,
+  caloriesEstimated: 0,
+  totalDurationSec: 0,
+  averageEffort: null,
+  weeks: [],
+};
+
+function formatDuration(sec = 0) {
+  const minutes = Math.round((Number(sec) || 0) / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+
 export default function Stats() {
   const [range, setRange] = useState(() => ({
     from: dayjs().subtract(step - 1, "day").format("YYYY-MM-DD"),
@@ -113,6 +130,7 @@ export default function Stats() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
   const [templates, setTemplates] = useState([]);
+  const [sessionSummary, setSessionSummary] = useState(EMPTY_SESSION_SUMMARY);
 
   // NEW: weight series state
   const [weightSeries, setWeightSeries] = useState([]); // [{templateId,name,data:[{date,weight}]}]
@@ -147,6 +165,17 @@ export default function Stats() {
       }
     })();
 
+    (async () => {
+      try {
+        const res = await api.getSessionSummary({ from: range.from, to: range.to });
+        if (!alive) return;
+        setSessionSummary(res || EMPTY_SESSION_SUMMARY);
+      } catch {
+        if (!alive) return;
+        setSessionSummary(EMPTY_SESSION_SUMMARY);
+      }
+    })();
+
     return () => { alive = false; };
   }, [range]);
 
@@ -168,7 +197,7 @@ export default function Stats() {
   function next() {
     if (!canNext) return;
     const nextTo = dayjs(range.to).add(step, "day");
-    const clampedTo = dayjs.min(nextTo, dayjs());
+    const clampedTo = nextTo.isAfter(dayjs(), "day") ? dayjs() : nextTo;
     const clampedFrom = clampedTo.subtract(step - 1, "day");
     setRange({ from: clampedFrom.format("YYYY-MM-DD"), to: clampedTo.format("YYYY-MM-DD") });
   }
@@ -243,6 +272,22 @@ export default function Stats() {
             {loading ? "…" : `${Math.round(Number(data?.totals?.volumeKg || 0))} kg`}
           </div>
         </div>
+        <div className="card p-5">
+          <div className="small text-muted-foreground">Calories burned</div>
+          <div className="text-3xl font-bold">{Math.round(Number(sessionSummary?.caloriesEstimated || 0))} kcal</div>
+        </div>
+        <div className="card p-5">
+          <div className="small text-muted-foreground">Guided sessions</div>
+          <div className="text-3xl font-bold">{sessionSummary?.completedSessions ?? 0}</div>
+        </div>
+        <div className="card p-5">
+          <div className="small text-muted-foreground">Guided duration</div>
+          <div className="text-3xl font-bold">{formatDuration(sessionSummary?.totalDurationSec || 0)}</div>
+        </div>
+        <div className="card p-5">
+          <div className="small text-muted-foreground">Average effort</div>
+          <div className="text-3xl font-bold">{sessionSummary?.averageEffort == null ? "—" : `${sessionSummary.averageEffort}/10`}</div>
+        </div>
       </div>
 
       {/* Totals */}
@@ -300,6 +345,20 @@ export default function Stats() {
                 max={Math.round(maxWeekVolume)}
                 valueSuffix=" kg"
               />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {(sessionSummary?.weeks || []).some((w) => Number(w.caloriesEstimated) > 0 || Number(w.sessions) > 0) && (
+        <div className="card p-5 space-y-3">
+          <div className="font-semibold">Weekly guided sessions and calories</div>
+          <div className="grid gap-3">
+            {(sessionSummary.weeks || []).map((w, i) => (
+              <div key={i} className="flex items-center justify-between rounded-xl border border-border px-3 py-2 bg-background">
+                <div className="small text-muted-foreground">{w.from} → {w.to}</div>
+                <div className="font-medium">{w.sessions || 0} sessions • {Math.round(Number(w.caloriesEstimated || 0))} kcal • {formatDuration(w.durationSec || 0)}</div>
+              </div>
             ))}
           </div>
         </div>

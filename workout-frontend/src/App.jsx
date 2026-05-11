@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState, useContext, createContext, useRef 
 import { api, setToken } from "./api";
 import dayjs from "dayjs";
 import Today from "./Today.jsx";
+import Player from "./Player.jsx";
 import Templates from "./Templates.jsx";
 import Stats from "./Stats.jsx";
 import { Button } from "./components/ui/button";
@@ -239,9 +240,14 @@ export default function App() {
     setToken(res.token);
     setUser(res.user);
   }
-  function logout() {
-    setToken("");
-    setUser(null);
+  async function logout() {
+    try {
+      await api.logout();
+    } catch {
+      setToken("");
+    } finally {
+      setUser(null);
+    }
   }
 
   return (
@@ -268,6 +274,7 @@ export default function App() {
                   "
                 >
                   <TabsTrigger value="today">Today</TabsTrigger>
+                  <TabsTrigger value="player">Player</TabsTrigger>
                   <TabsTrigger value="templates">Templates</TabsTrigger>
                   <TabsTrigger value="stats">Stats</TabsTrigger>
                 </TabsList>
@@ -293,7 +300,8 @@ export default function App() {
           <AuthCard onAuth={handleAuth} />
         ) : (
           <main className="stack mt-3 md:mt-4 mb-[calc(env(safe-area-inset-bottom)+64px)] sm:mb-4">
-            {tab === "today" && <Today />}
+            {tab === "today" && <Today onOpenPlayer={() => setTab("player")} />}
+            {tab === "player" && <Player />}
             {tab === "templates" && <Templates />}
             {tab === "stats" && <Stats />}
             <div className="small">Today: {dayjs().format("YYYY-MM-DD")}</div>
@@ -316,8 +324,9 @@ export default function App() {
               pb-safe-b
             "
           >
-            <div className="grid grid-cols-3 gap-1 p-2">
+            <div className="grid grid-cols-4 gap-1 p-2">
               <MobileTabButton label="Today" active={tab==="today"} onClick={()=>setTab("today")} />
+              <MobileTabButton label="Player" active={tab==="player"} onClick={()=>setTab("player")} />
               <MobileTabButton label="Templates" active={tab==="templates"} onClick={()=>setTab("templates")} />
               <MobileTabButton label="Stats" active={tab==="stats"} onClick={()=>setTab("stats")} />
             </div>
