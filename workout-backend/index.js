@@ -126,6 +126,24 @@ const TaskTemplateSchema = new mongoose.Schema({
   deloadRule: {
     everyNWeeks: { type: Number, default: 0 },
     scale: { type: Number, default: 0.7 }
+  },
+  sessionMode: { type: String, enum: ['manual', 'automatic'], default: 'manual' },
+  sessionBlocks: {
+    type: [{
+      type: { type: String, enum: ['exercise', 'rest', 'warmup', 'cooldown'], default: 'exercise' },
+      name: { type: String, default: '' },
+      durationSec: { type: Number, default: 45 },
+      targetReps: { type: Number, default: null },
+      order: { type: Number, default: 0 }
+    }],
+    default: []
+  },
+  autoSessionSettings: {
+    workoutDurationMin: { type: Number, default: 20 },
+    fitnessLevel: { type: String, enum: ['beginner', 'intermediate', 'advanced'], default: 'beginner' },
+    restStyle: { type: String, enum: ['short', 'standard', 'long'], default: 'standard' },
+    includeWarmup: { type: Boolean, default: true },
+    includeCooldown: { type: Boolean, default: true }
   }
 }, { timestamps: true });
 
@@ -178,6 +196,52 @@ const NotifyStateSchema = new mongoose.Schema({
 NotifyStateSchema.index({ userId:1, kind:1, date:1 }, { unique: true });
 const NotifyState = mongoose.model('NotifyState', NotifyStateSchema);
 
+const WorkoutSessionSchema = new mongoose.Schema({
+  userId: { type: mongoose.Types.ObjectId, ref: 'User', required: true },
+  dailyInstanceId: { type: mongoose.Types.ObjectId, ref: 'DailyInstance', default: null },
+  dailyInstanceIds: { type: [mongoose.Types.ObjectId], ref: 'DailyInstance', default: [] },
+  templateId: { type: mongoose.Types.ObjectId, ref: 'TaskTemplate', default: null },
+  sessionType: { type: String, enum: ['single', 'daily'], default: 'single' },
+  totalRounds: { type: Number, default: 1 },
+  workoutMode: { type: String, enum: ['circuit', 'sequential'], default: 'sequential' },
+  sessionSettings: { type: mongoose.Schema.Types.Mixed, default: {} },
+  date: { type: String, required: true },
+  startedAt: Date,
+  endedAt: Date,
+  durationSec: { type: Number, default: 0 },
+  blocksCompleted: { type: Number, default: 0 },
+  totalBlocks: { type: Number, default: 0 },
+  caloriesEstimated: { type: Number, default: null },
+  bodyWeightKg: { type: Number, default: null },
+  calorieNote: { type: String, default: '' },
+  perceivedEffort: { type: Number, default: null },
+  status: { type: String, enum: ['completed', 'cancelled'], default: 'completed' },
+  blockResults: {
+    type: [{
+      type: { type: String, enum: ['exercise', 'rest', 'warmup', 'cooldown'], default: 'exercise' },
+      name: { type: String, default: '' },
+      workoutName: { type: String, default: '' },
+      dailyInstanceId: { type: mongoose.Types.ObjectId, ref: 'DailyInstance', default: null },
+      templateId: { type: mongoose.Types.ObjectId, ref: 'TaskTemplate', default: null },
+      round: { type: Number, default: null },
+      setNumber: { type: Number, default: null },
+      totalSets: { type: Number, default: null },
+      plannedDurationSec: { type: Number, default: 0 },
+      actualDurationSec: { type: Number, default: 0 },
+      targetReps: { type: Number, default: null },
+      completedReps: { type: Number, default: null },
+      plannedWeight: { type: Number, default: null },
+      completedWeight: { type: Number, default: null },
+      skipped: { type: Boolean, default: false },
+      workoutKind: { type: String, default: '' },
+      order: { type: Number, default: 0 }
+    }],
+    default: []
+  }
+}, { timestamps: true });
+WorkoutSessionSchema.index({ userId: 1, date: 1 });
+const WorkoutSession = mongoose.model('WorkoutSession', WorkoutSessionSchema);
+
 // --- Auth middleware ---
 function auth(req, res, next) {
   const hdr = req.headers.authorization;
@@ -193,6 +257,119 @@ function auth(req, res, next) {
 }
 
 // --- Helpers ---
+function normalizeEmail(email) {
+  return String(email || '').trim().toLowerCase();
+}
+
+function validObjectId(id) {
+  return mongoose.Types.ObjectId.isValid(String(id || ''));
+}
+
+function rejectBadObjectId(res, id, label = 'id') {
+  if (validObjectId(id)) return false;
+  res.status(400).json({ error: `Invalid ${label}` });
+  return true;
+}
+
+function finiteNumber(value, { min = null, max = null, allowNull = false } = {}) {
+  if ((value === null || value === '') && allowNull) return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return undefined;
+  if (min !== null && n < min) return undefined;
+  if (max !== null && n > max) return undefined;
+  return n;
+}
+
+function cleanDate(value, fallback = dayjs().format('YYYY-MM-DD')) {
+  const d = dayjs(value || fallback);
+  return d.isValid() ? d.format('YYYY-MM-DD') : fallback;
+}
+
+function normalizeSessionBlocks(input = []) {
+  if (!Array.isArray(input)) return [];
+  const allowed = new Set(['exercise', 'rest', 'warmup', 'cooldown']);
+  return input.map((b, idx) => {
+    const type = allowed.has(b?.type) ? b.type : 'exercise';
+    const durationSec = finiteNumber(b?.durationSec, { min: 1, max: 60 * 60 }) ?? 45;
+    const targetReps = finiteNumber(b?.targetReps, { min: 0, max: 10000, allowNull: true });
+    return {
+      type,
+      name: String(b?.name || type).trim().slice(0, 120),
+      durationSec: Math.round(durationSec),
+      targetReps: targetReps == null ? null : Math.round(targetReps),
+      order: Math.round(finiteNumber(b?.order, { min: 0, max: 1000 }) ?? idx)
+    };
+  }).sort((a, b) => a.order - b.order).map((b, idx) => ({ ...b, order: idx }));
+}
+
+function normalizeSessionResultBlocks(input = []) {
+  if (!Array.isArray(input)) return [];
+  const allowed = new Set(['exercise', 'rest', 'warmup', 'cooldown']);
+  return input.map((b, idx) => {
+    const type = allowed.has(b?.type) ? b.type : 'exercise';
+    const plannedDurationSec = finiteNumber(b?.plannedDurationSec ?? b?.durationSec, { min: 0, max: 60 * 60 }) ?? 0;
+    const actualDurationSec = finiteNumber(b?.actualDurationSec, { min: 0, max: 60 * 60 }) ?? plannedDurationSec;
+    const targetReps = finiteNumber(b?.targetReps, { min: 0, max: 10000, allowNull: true });
+    const completedReps = finiteNumber(b?.completedReps, { min: 0, max: 10000, allowNull: true });
+    const plannedWeight = finiteNumber(b?.plannedWeight, { min: 0, max: 1000, allowNull: true });
+    const completedWeight = finiteNumber(b?.completedWeight, { min: 0, max: 1000, allowNull: true });
+    const dailyInstanceId = validObjectId(b?.dailyInstanceId) ? String(b.dailyInstanceId) : null;
+    const templateId = validObjectId(b?.templateId) ? String(b.templateId) : null;
+    const round = finiteNumber(b?.round, { min: 0, max: 1000, allowNull: true });
+    const setNumber = finiteNumber(b?.setNumber, { min: 0, max: 1000, allowNull: true });
+    const totalSets = finiteNumber(b?.totalSets, { min: 0, max: 1000, allowNull: true });
+    return {
+      type,
+      name: String(b?.name || type).trim().slice(0, 120),
+      workoutName: String(b?.workoutName || b?.name || '').trim().slice(0, 120),
+      dailyInstanceId,
+      templateId,
+      round: round == null ? null : Math.round(round),
+      setNumber: setNumber == null ? null : Math.round(setNumber),
+      totalSets: totalSets == null ? null : Math.round(totalSets),
+      plannedDurationSec: Math.round(plannedDurationSec),
+      actualDurationSec: Math.round(actualDurationSec),
+      targetReps: targetReps == null ? null : Math.round(targetReps),
+      completedReps: completedReps == null ? null : Math.round(completedReps),
+      plannedWeight: plannedWeight == null ? null : Number(plannedWeight),
+      completedWeight: completedWeight == null ? null : Number(completedWeight),
+      skipped: !!b?.skipped,
+      workoutKind: String(b?.workoutKind || '').trim().slice(0, 40),
+      order: Math.round(finiteNumber(b?.order, { min: 0, max: 1000 }) ?? idx)
+    };
+  }).sort((a, b) => a.order - b.order).map((b, idx) => ({ ...b, order: idx }));
+}
+
+function normalizeAutoSessionSettings(input = {}) {
+  const fitnessLevels = ['beginner', 'intermediate', 'advanced'];
+  const restStyles = ['short', 'standard', 'long'];
+  return {
+    workoutDurationMin: Math.round(finiteNumber(input.workoutDurationMin, { min: 5, max: 180 }) ?? 20),
+    fitnessLevel: fitnessLevels.includes(input.fitnessLevel) ? input.fitnessLevel : 'beginner',
+    restStyle: restStyles.includes(input.restStyle) ? input.restStyle : 'standard',
+    includeWarmup: typeof input.includeWarmup === 'boolean' ? input.includeWarmup : true,
+    includeCooldown: typeof input.includeCooldown === 'boolean' ? input.includeCooldown : true
+  };
+}
+
+function validateTemplateNumbers({ dailyTarget, defaultSetSize, weight, weightPattern, progression, deloadRule }) {
+  if (finiteNumber(dailyTarget, { min: 1, max: 10000 }) === undefined) return 'dailyTarget must be a positive number';
+  if (finiteNumber(defaultSetSize ?? dailyTarget, { min: 1, max: 10000 }) === undefined) return 'defaultSetSize must be a positive number';
+  if (weight !== null && typeof weight !== 'undefined' && finiteNumber(weight, { min: 0, max: 1000, allowNull: true }) === undefined) return 'weight must be a valid number';
+  if (weightPattern) {
+    for (const key of ['start', 'end', 'step']) {
+      if (weightPattern[key] !== null && typeof weightPattern[key] !== 'undefined' && finiteNumber(weightPattern[key], { min: 0, max: 1000, allowNull: true }) === undefined) {
+        return `weightPattern.${key} must be a valid number`;
+      }
+    }
+  }
+  if (progression?.weeklyPct !== undefined && finiteNumber(progression.weeklyPct, { min: 0, max: 1000 }) === undefined) return 'progression.weeklyPct must be a valid number';
+  if (progression?.cap !== null && progression?.cap !== undefined && finiteNumber(progression.cap, { min: 1, max: 100000, allowNull: true }) === undefined) return 'progression.cap must be a valid number';
+  if (deloadRule?.everyNWeeks !== undefined && finiteNumber(deloadRule.everyNWeeks, { min: 0, max: 520 }) === undefined) return 'deloadRule.everyNWeeks must be a valid number';
+  if (deloadRule?.scale !== undefined && finiteNumber(deloadRule.scale, { min: 0.1, max: 1 }) === undefined) return 'deloadRule.scale must be between 0.1 and 1';
+  return '';
+}
+
 function isActiveOnDate(tpl, date) {
   const d = dayjs(date);
   const day = d.day(); // 0..6
@@ -270,6 +447,35 @@ function computeStatus(repsDone, target) {
   if (repsDone < target) return 'on-track';
   if (repsDone === target) return 'done';
   return 'ahead';
+}
+
+function metForBlock(block, templateKind = 'calisthenics') {
+  if (block.type === 'warmup' || block.type === 'cooldown') return 2.5;
+  if (block.type === 'rest') return 1.2;
+  const name = String(`${block.name || ''} ${block.workoutName || ''}`).toLowerCase();
+  if (name.includes('hiit') || name.includes('circuit')) return 8.0;
+  const kind = block.workoutKind || templateKind;
+  if (kind === 'gym') return 6.0;
+  return templateKind === 'circuit' ? 7.0 : 5.5;
+}
+
+async function bodyWeightForDate(userId, date) {
+  const exact = await DailyMetric.findOne({ userId, date, weightKg: { $ne: null } }).sort({ updatedAt: -1 }).lean();
+  if (exact?.weightKg) return { weightKg: Number(exact.weightKg), note: '' };
+  const latest = await DailyMetric.findOne({ userId, date: { $lte: date }, weightKg: { $ne: null } }).sort({ date: -1 }).lean();
+  if (latest?.weightKg) return { weightKg: Number(latest.weightKg), note: `Used latest known body weight from ${latest.date}.` };
+  return { weightKg: null, note: 'Add body weight in Today metrics to estimate calories.' };
+}
+
+function estimateCalories({ blocks, durationSec, bodyWeightKg, templateKind }) {
+  if (!bodyWeightKg || bodyWeightKg <= 0 || !durationSec || durationSec <= 0) return null;
+  const rows = Array.isArray(blocks) && blocks.length ? blocks : [{ type: 'exercise', actualDurationSec: durationSec, name: '' }];
+  const total = rows.reduce((sum, b) => {
+    const secs = Number(b.actualDurationSec ?? b.plannedDurationSec ?? 0) || 0;
+    const hours = secs / 3600;
+    return sum + metForBlock(b, templateKind) * bodyWeightKg * hours;
+  }, 0);
+  return Math.max(0, Math.round(total));
 }
 
 function weeksSince(startDate, date) {
@@ -529,8 +735,10 @@ async function moveOneDailyInstance(di, destDate, userId) {
 
 // --- Routes: Auth ---
 app.post('/auth/register', async (req, res) => {
-  const { email, password, tz, firstName = '', lastName = '' } = req.body;
+  const { password, tz, firstName = '', lastName = '' } = req.body;
+  const email = normalizeEmail(req.body?.email);
   if (!email || !password) return res.status(400).json({ error: 'Email & password required' });
+  if (String(password).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
 
   const exists = await User.findOne({ email });
   if (exists) return res.status(400).json({ error: 'Email already registered' });
@@ -553,7 +761,8 @@ app.post('/auth/register', async (req, res) => {
 });
 
 app.post('/auth/login', async (req, res) => {
-  const { email, password } = req.body;
+  const email = normalizeEmail(req.body?.email);
+  const { password } = req.body;
   const user = await User.findOne({ email });
   if (!user) return res.status(400).json({ error: 'Invalid credentials' });
   const ok = await bcrypt.compare(password, user.passwordHash);
@@ -568,11 +777,14 @@ app.post('/auth/login', async (req, res) => {
 });
 
 app.get('/me', auth, async (req, res) => {
+  if (rejectBadObjectId(res, req.userId, 'user id')) return;
   const u = await User.findById(req.userId).lean();
+  if (!u) return res.status(404).json({ error: 'Not found' });
   res.json({ id: u._id, email: u.email, tz: u.tz, firstName: u.firstName || '', lastName: u.lastName || '' });
 });
 
 app.patch('/me', auth, async (req, res) => {
+  if (rejectBadObjectId(res, req.userId, 'user id')) return;
   const { firstName, lastName, tz } = req.body || {};
   const set = {};
   if (typeof firstName === 'string') set.firstName = firstName.trim();
@@ -619,14 +831,15 @@ app.post('/auth/logout', async (req, res) => {
 });
 
 app.post('/auth/forgot-password', async (req, res) => {
-  const { email } = req.body;
+  const email = normalizeEmail(req.body?.email);
   const user = await User.findOne({ email });
   if (user) {
     const token = crypto.randomBytes(32).toString('base64url');
     const tokenHash = sha256(token);
     const expiresAt = new Date(Date.now() + 1000 * 60 * 30); // 30 min
     await User.updateOne({ _id: user._id }, { $set: { reset: { tokenHash, expiresAt } } });
-    const resetUrl = `http://localhost:5173/reset?token=${token}&email=${encodeURIComponent(email)}`;
+    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+    const resetUrl = `${frontendUrl}/reset?token=${token}&email=${encodeURIComponent(email)}`;
     console.log('🔐 Password reset link:', resetUrl);
   }
   res.json({ ok: true });
@@ -635,6 +848,7 @@ app.post('/auth/forgot-password', async (req, res) => {
 app.post('/auth/reset-password', async (req, res) => {
   const { token, password } = req.body;
   if (!token || !password) return res.status(400).json({ error: 'Missing token or password' });
+  if (String(password).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
 
   const tokenHash = sha256(token);
   const user = await User.findOne({ 'reset.tokenHash': tokenHash });
@@ -659,8 +873,16 @@ app.patch('/metrics', auth, async (req, res) => {
   if (!date) return res.status(400).json({ error: 'date required (YYYY-MM-DD)' });
 
   const set = {};
-  if (typeof weightKg !== 'undefined') set.weightKg = (weightKg === null ? null : Number(weightKg));
-  if (typeof heightCm !== 'undefined') set.heightCm = (heightCm === null ? null : Number(heightCm));
+  if (typeof weightKg !== 'undefined') {
+    const n = finiteNumber(weightKg, { min: 0, max: 1000, allowNull: true });
+    if (n === undefined) return res.status(400).json({ error: 'weightKg must be a valid number' });
+    set.weightKg = n;
+  }
+  if (typeof heightCm !== 'undefined') {
+    const n = finiteNumber(heightCm, { min: 0, max: 300, allowNull: true });
+    if (n === undefined) return res.status(400).json({ error: 'heightCm must be a valid number' });
+    set.heightCm = n;
+  }
 
   const doc = await DailyMetric.findOneAndUpdate(
     { userId: req.userId, date: date.slice(0,10) },
@@ -682,9 +904,14 @@ app.post('/templates', auth, async (req, res) => {
   } = req.body;
 
   if (!name || !dailyTarget) return res.status(400).json({ error: 'name & dailyTarget required' });
+  const numberError = validateTemplateNumbers({ dailyTarget, defaultSetSize, weight, weightPattern, progression, deloadRule });
+  if (numberError) return res.status(400).json({ error: numberError });
 
   // sanitize/normalize weightPattern for gym
   const wp = normalizeWeightPattern(kind, weightPattern ?? { mode: 'fixed', start: (weight ?? null) }, weight);
+  const sessionMode = ['manual', 'automatic'].includes(req.body?.sessionMode) ? req.body.sessionMode : 'manual';
+  const sessionBlocks = normalizeSessionBlocks(req.body?.sessionBlocks);
+  const autoSessionSettings = normalizeAutoSessionSettings(req.body?.autoSessionSettings || {});
 
   const tpl = await TaskTemplate.create({
     userId: req.userId,
@@ -701,7 +928,10 @@ app.post('/templates', auth, async (req, res) => {
     active: true,
     kind, group,
     progression: progression || { weeklyPct: 0, cap: null },
-    deloadRule: deloadRule || { everyNWeeks: 0, scale: 0.7 }
+    deloadRule: deloadRule || { everyNWeeks: 0, scale: 0.7 },
+    sessionMode,
+    sessionBlocks,
+    autoSessionSettings
   });
 
   res.json(tpl);
@@ -713,6 +943,7 @@ app.get('/templates', auth, async (req, res) => {
 });
 
 app.patch('/templates/:id', auth, async (req, res) => {
+  if (rejectBadObjectId(res, req.params.id)) return;
   // fetch existing to handle kind/weightPattern transitions robustly
   const existing = await TaskTemplate.findOne({ _id: req.params.id, userId: req.userId });
   if (!existing) return res.status(404).json({ error: 'Not found' });
@@ -724,6 +955,15 @@ app.patch('/templates/:id', auth, async (req, res) => {
   const maybeWp = (typeof patch.weightPattern !== 'undefined') ? patch.weightPattern : existing.weightPattern;
 
   const wp = normalizeWeightPattern(nextKind, maybeWp, nextWeight);
+  const numberError = validateTemplateNumbers({
+    dailyTarget: patch.dailyTarget ?? existing.dailyTarget,
+    defaultSetSize: patch.defaultSetSize ?? existing.defaultSetSize,
+    weight: nextWeight,
+    weightPattern: patch.weightPattern ?? existing.weightPattern,
+    progression: patch.progression ?? existing.progression,
+    deloadRule: patch.deloadRule ?? existing.deloadRule
+  });
+  if (numberError) return res.status(400).json({ error: numberError });
 
   if (nextKind !== 'gym') {
     // clean up gym-only fields if switching away
@@ -732,6 +972,15 @@ app.patch('/templates/:id', auth, async (req, res) => {
     patch.weightPattern = undefined;
   } else {
     patch.weightPattern = wp;
+  }
+  if (typeof patch.sessionMode !== 'undefined') {
+    patch.sessionMode = ['manual', 'automatic'].includes(patch.sessionMode) ? patch.sessionMode : 'manual';
+  }
+  if (typeof patch.sessionBlocks !== 'undefined') {
+    patch.sessionBlocks = normalizeSessionBlocks(patch.sessionBlocks);
+  }
+  if (typeof patch.autoSessionSettings !== 'undefined') {
+    patch.autoSessionSettings = normalizeAutoSessionSettings(patch.autoSessionSettings || {});
   }
 
   const tpl = await TaskTemplate.findOneAndUpdate(
@@ -745,6 +994,7 @@ app.patch('/templates/:id', auth, async (req, res) => {
 });
 
 app.delete('/templates/:id', auth, async (req, res) => {
+  if (rejectBadObjectId(res, req.params.id)) return;
   await TaskTemplate.deleteOne({ _id: req.params.id, userId: req.userId });
   res.json({ ok: true });
 });
@@ -923,8 +1173,201 @@ app.get('/stats/summary', auth, async (req, res) => {
   });
 });
 
+// --- Routes: Guided workout sessions ---
+app.post('/sessions', auth, async (req, res) => {
+  const {
+    dailyInstanceId = null,
+    dailyInstanceIds = [],
+    templateId = null,
+    date,
+    startedAt,
+    endedAt,
+    perceivedEffort,
+    status = 'completed',
+    sessionType = 'single',
+    workoutMode = 'sequential',
+    totalRounds = 1,
+    sessionSettings = {},
+    updateDailyProgress = true
+  } = req.body || {};
+
+  if (dailyInstanceId && rejectBadObjectId(res, dailyInstanceId, 'dailyInstanceId')) return;
+  if (templateId && rejectBadObjectId(res, templateId, 'templateId')) return;
+  const cleanDailyInstanceIds = Array.isArray(dailyInstanceIds)
+    ? [...new Set(dailyInstanceIds.filter(Boolean).map(String))]
+    : [];
+  for (const id of cleanDailyInstanceIds) {
+    if (rejectBadObjectId(res, id, 'dailyInstanceIds')) return;
+  }
+
+  const cleanStatus = ['completed', 'cancelled'].includes(status) ? status : 'completed';
+  const cleanSessionType = sessionType === 'daily' ? 'daily' : 'single';
+  const cleanWorkoutMode = ['circuit', 'sequential'].includes(workoutMode) ? workoutMode : 'sequential';
+  const cleanTotalRounds = Math.round(finiteNumber(totalRounds, { min: 1, max: 1000 }) ?? 1);
+  const blockResults = normalizeSessionResultBlocks(req.body?.blockResults || []);
+  const computedDuration = blockResults.reduce((s, b) => s + (Number(b.actualDurationSec) || 0), 0);
+  const durationSec = Math.round(
+    finiteNumber(req.body?.durationSec, { min: 0, max: 24 * 60 * 60 }) ?? computedDuration
+  );
+  const effort = finiteNumber(perceivedEffort, { min: 1, max: 10, allowNull: true });
+  if (effort === undefined) return res.status(400).json({ error: 'perceivedEffort must be between 1 and 10' });
+
+  let daily = null;
+  let dailies = [];
+  if (dailyInstanceId) {
+    daily = await DailyInstance.findOne({ _id: dailyInstanceId, userId: req.userId }).populate('templateId');
+    if (!daily) return res.status(404).json({ error: 'Daily workout not found' });
+  }
+  if (cleanDailyInstanceIds.length) {
+    dailies = await DailyInstance.find({ _id: { $in: cleanDailyInstanceIds }, userId: req.userId }).populate('templateId');
+    if (dailies.length !== cleanDailyInstanceIds.length) return res.status(404).json({ error: 'One or more daily workouts were not found' });
+  }
+
+  let template = null;
+  const resolvedTemplateId = templateId || daily?.templateId?._id;
+  if (resolvedTemplateId) {
+    template = daily?.templateId?._id ? daily.templateId : await TaskTemplate.findOne({ _id: resolvedTemplateId, userId: req.userId }).lean();
+    if (!template) return res.status(404).json({ error: 'Template not found' });
+  }
+
+  const sessionDate = cleanDate(date || daily?.date || dailies[0]?.date);
+  const { weightKg, note } = await bodyWeightForDate(req.userId, sessionDate);
+  const caloriesEstimated = estimateCalories({
+    blocks: blockResults,
+    durationSec,
+    bodyWeightKg: weightKg,
+    templateKind: cleanSessionType === 'daily' && cleanWorkoutMode === 'circuit'
+      ? 'circuit'
+      : (template?.kind || daily?.templateId?.kind || dailies[0]?.templateId?.kind || 'calisthenics')
+  });
+
+  const completedBlocks = blockResults.filter(b => {
+    if (cleanStatus !== 'completed') return false;
+    if (b.type === 'rest') return true;
+    return (Number(b.actualDurationSec) || 0) > 0 || (Number(b.completedReps) || 0) > 0;
+  }).length;
+
+  const doc = await WorkoutSession.create({
+    userId: req.userId,
+    dailyInstanceId: daily?._id || null,
+    dailyInstanceIds: cleanDailyInstanceIds,
+    templateId: template?._id || resolvedTemplateId || null,
+    sessionType: cleanSessionType,
+    totalRounds: cleanTotalRounds,
+    workoutMode: cleanWorkoutMode,
+    sessionSettings,
+    date: sessionDate,
+    startedAt: startedAt ? new Date(startedAt) : new Date(),
+    endedAt: endedAt ? new Date(endedAt) : new Date(),
+    durationSec,
+    blocksCompleted: completedBlocks,
+    totalBlocks: blockResults.length,
+    caloriesEstimated,
+    bodyWeightKg: weightKg,
+    calorieNote: note,
+    perceivedEffort: effort,
+    status: cleanStatus,
+    blockResults
+  });
+
+  if (cleanStatus === 'completed' && updateDailyProgress) {
+    const dailyMap = new Map();
+    if (daily) dailyMap.set(daily._id.toString(), daily);
+    for (const row of dailies) dailyMap.set(row._id.toString(), row);
+
+    for (const [id, row] of dailyMap.entries()) {
+      const related = blockResults.filter(b => b.type === 'exercise' && String(b.dailyInstanceId || '') === id);
+      const completedReps = related.reduce((s, b) => s + (Number(b.completedReps) || Number(b.targetReps) || 0), 0);
+      const nextDone = Math.max(
+        Number(row.repsDone || 0),
+        completedReps > 0 ? Math.min(completedReps, Number(row.target || completedReps)) : Number(row.target || 0)
+      );
+      row.repsDone = nextDone;
+      row.status = computeStatus(row.repsDone, row.target);
+      if (!Array.isArray(row.setsDone)) row.setsDone = [];
+      if (!row.setsDone.length && related.length) {
+        row.setsDone = related.map(b => Number(b.completedReps) || Number(b.targetReps) || 0).filter(n => n > 0);
+      }
+      if (!Array.isArray(row.weightsDone)) row.weightsDone = [];
+      if (!row.weightsDone.length && related.length) {
+        row.weightsDone = related.map(b => {
+          const n = Number(b.completedWeight ?? b.plannedWeight);
+          return Number.isFinite(n) ? n : null;
+        });
+      }
+      await row.save();
+    }
+  }
+
+  res.json(doc);
+});
+
+app.get('/sessions/summary', auth, async (req, res) => {
+  const to = cleanDate(req.query.to);
+  const from = cleanDate(req.query.from || dayjs(to).subtract(27, 'day').format('YYYY-MM-DD'));
+  const items = await WorkoutSession.find({ userId: req.userId, date: { $gte: from, $lte: to } }).lean();
+  const completed = items.filter(s => s.status === 'completed');
+  const effortValues = completed.map(s => Number(s.perceivedEffort)).filter(Number.isFinite);
+  const caloriesEstimated = completed.reduce((s, x) => s + (Number(x.caloriesEstimated) || 0), 0);
+  const totalDurationSec = completed.reduce((s, x) => s + (Number(x.durationSec) || 0), 0);
+  const weeks = [];
+  const byDate = new Map();
+  for (let d = dayjs(from).startOf('day'); !d.isAfter(dayjs(to), 'day'); d = d.add(1, 'day')) {
+    byDate.set(d.format('YYYY-MM-DD'), { date: d.format('YYYY-MM-DD'), caloriesEstimated: 0, durationSec: 0, sessions: 0 });
+  }
+  for (const item of completed) {
+    const row = byDate.get(item.date);
+    if (!row) continue;
+    row.caloriesEstimated += Number(item.caloriesEstimated) || 0;
+    row.durationSec += Number(item.durationSec) || 0;
+    row.sessions += 1;
+  }
+  const days = Array.from(byDate.values());
+  for (let i = 0; i < days.length; i += 7) {
+    const slice = days.slice(i, i + 7);
+    weeks.push({
+      from: slice[0]?.date,
+      to: slice[slice.length - 1]?.date,
+      caloriesEstimated: slice.reduce((s, x) => s + x.caloriesEstimated, 0),
+      durationSec: slice.reduce((s, x) => s + x.durationSec, 0),
+      sessions: slice.reduce((s, x) => s + x.sessions, 0)
+    });
+  }
+
+  res.json({
+    range: { from, to },
+    completedSessions: completed.length,
+    cancelledSessions: items.length - completed.length,
+    caloriesEstimated,
+    totalDurationSec,
+    averageEffort: effortValues.length ? Math.round((effortValues.reduce((s, n) => s + n, 0) / effortValues.length) * 10) / 10 : null,
+    days,
+    weeks
+  });
+});
+
+app.get('/sessions', auth, async (req, res) => {
+  const to = cleanDate(req.query.to);
+  const from = cleanDate(req.query.from || dayjs(to).subtract(27, 'day').format('YYYY-MM-DD'));
+  const items = await WorkoutSession.find({ userId: req.userId, date: { $gte: from, $lte: to } })
+    .populate('templateId', 'name kind group')
+    .sort({ startedAt: -1 })
+    .lean();
+  res.json({ range: { from, to }, items });
+});
+
+app.get('/sessions/:id', auth, async (req, res) => {
+  if (rejectBadObjectId(res, req.params.id)) return;
+  const item = await WorkoutSession.findOne({ _id: req.params.id, userId: req.userId })
+    .populate('templateId', 'name kind group')
+    .lean();
+  if (!item) return res.status(404).json({ error: 'Not found' });
+  res.json(item);
+});
+
 // --- Routes: Daily progress ---
 app.patch('/daily/:id/progress', auth, async (req, res) => {
+  if (rejectBadObjectId(res, req.params.id)) return;
   const { addReps, completeSet, undoLast, weightForSet } = req.body;
 
   const di = await DailyInstance.findOne({ _id: req.params.id, userId: req.userId });
@@ -937,18 +1380,25 @@ app.patch('/daily/:id/progress', auth, async (req, res) => {
       // remove last weight if any
       if (Array.isArray(di.weightsDone) && di.weightsDone.length) di.weightsDone.pop();
     }
-  } else if (typeof completeSet === 'number' && completeSet > 0) {
-    di.setsDone.push(completeSet);
-    di.repsDone += completeSet;
+  } else if (typeof completeSet !== 'undefined') {
+    const n = finiteNumber(completeSet, { min: 1, max: 10000 });
+    if (n === undefined) return res.status(400).json({ error: 'completeSet must be a positive number' });
+    di.setsDone.push(n);
+    di.repsDone += n;
     const w =
       Number.isFinite(Number(weightForSet)) ? Number(weightForSet)
       : (Array.isArray(di.weightsPlanned) ? di.weightsPlanned[di.setsDone.length - 1] : null);
+    if (weightForSet !== undefined && finiteNumber(weightForSet, { min: 0, max: 1000 }) === undefined) {
+      return res.status(400).json({ error: 'weightForSet must be a valid number' });
+    }
     if (!Array.isArray(di.weightsDone)) di.weightsDone = [];
     di.weightsDone.push(Number.isFinite(w) ? Number(w) : null);
-  } else if (typeof addReps === 'number' && addReps > 0) {
+  } else if (typeof addReps !== 'undefined') {
+    const n = finiteNumber(addReps, { min: 1, max: 10000 });
+    if (n === undefined) return res.status(400).json({ error: 'addReps must be a positive number' });
     // free-form adds: record reps, weight unknown
-    di.setsDone.push(addReps);
-    di.repsDone += addReps;
+    di.setsDone.push(n);
+    di.repsDone += n;
     if (!Array.isArray(di.weightsDone)) di.weightsDone = [];
     di.weightsDone.push(null);
   }
@@ -959,12 +1409,21 @@ app.patch('/daily/:id/progress', auth, async (req, res) => {
 });
 
 app.patch('/daily/:id/meta', auth, async (req, res) => {
+  if (rejectBadObjectId(res, req.params.id)) return;
   const { notes, rpe, weight } = req.body;
 
   const set = {};
   if (typeof notes !== 'undefined') set.notes = notes;
-  if (typeof rpe !== 'undefined')   set.rpe = rpe;
-  if (typeof weight !== 'undefined') set.weight = (weight === null ? null : Number(weight));
+  if (typeof rpe !== 'undefined') {
+    const n = finiteNumber(rpe, { min: 1, max: 10, allowNull: true });
+    if (n === undefined) return res.status(400).json({ error: 'rpe must be between 1 and 10' });
+    set.rpe = n;
+  }
+  if (typeof weight !== 'undefined') {
+    const n = finiteNumber(weight, { min: 0, max: 1000, allowNull: true });
+    if (n === undefined) return res.status(400).json({ error: 'weight must be a valid number' });
+    set.weight = n;
+  }
 
   const di = await DailyInstance.findOneAndUpdate(
     { _id: req.params.id, userId: req.userId },
@@ -977,6 +1436,7 @@ app.patch('/daily/:id/meta', auth, async (req, res) => {
 
 // --- Routes: Daily move/reschedule ---
 app.post('/daily/:id/move', auth, async (req, res) => {
+  if (rejectBadObjectId(res, req.params.id)) return;
   const { toDate } = req.body;
   if (!toDate) return res.status(400).json({ error: 'toDate required (YYYY-MM-DD)' });
   const destDate = dayjs(toDate).format('YYYY-MM-DD');
@@ -1014,6 +1474,7 @@ app.post('/daily/move-day', auth, async (req, res) => {
   res.json({ ok: true, from: src, to: dst, moved, merged, skipped, details });
 });
 
-app.listen(process.env.PORT, () => {
-  console.log(`API running on http://localhost:${process.env.PORT}`);
+const PORT = process.env.PORT || 5050;
+app.listen(PORT, () => {
+  console.log(`API running on http://localhost:${PORT}`);
 });

@@ -62,6 +62,8 @@ export default function MonthCalendar({
     if (status === "done") return "bg-emerald-600/30 border-emerald-600/50";
     if (status === "partial") return "bg-amber-500/30 border-amber-500/50";
     if (status === "missed") return "bg-rose-600/30 border-rose-600/50";
+    if (status === "scheduled") return "bg-blue-500/20 border-blue-500/40";
+    if (status === "rest") return "bg-background border-border/70";
     return "bg-secondary border-border";
   }
 
@@ -193,6 +195,14 @@ export default function MonthCalendar({
         <span className="inline-flex items-center gap-2">
           <span className="h-3 w-3 rounded bg-rose-600/70 inline-block" />
           Missed
+        </span>
+        <span className="inline-flex items-center gap-2">
+          <span className="h-3 w-3 rounded bg-blue-500/60 inline-block" />
+          Scheduled
+        </span>
+        <span className="inline-flex items-center gap-2">
+          <span className="h-3 w-3 rounded bg-background inline-block border border-border" />
+          Rest
         </span>
         <span className="inline-flex items-center gap-2">
           <span className="h-3 w-3 rounded bg-secondary inline-block border border-border" />

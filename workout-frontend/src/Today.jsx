@@ -9,6 +9,11 @@ import DatePicker from "./DatePicker.jsx";
 import ProgressRing from "./components/ProgressRing.jsx";
 import MonthCalendar from "./components/MonthCalendar.jsx";
 import { appBus } from "./bus";
+import WorkoutPlayer from "./components/workout-player/WorkoutPlayer.jsx";
+import {
+  fallbackBlocksFromDaily,
+  normalizeSessionBlocks,
+} from "./lib/sessionBlocks.js";
 
 function useDebouncedEffect(fn, deps, delay = 500) {
   useEffect(() => {
@@ -201,7 +206,7 @@ function MetricsCard({ date }) {
   );
 }
 
-function TaskCard({ item, onChanged }) {
+function TaskCard({ item, onChanged, onPlay }) {
   const [saving, setSaving] = useState(false);
   const [notes, setNotes] = useState(item.notes || "");
   const [rpe, setRpe] = useState(item.rpe ?? "");
@@ -378,6 +383,9 @@ function TaskCard({ item, onChanged }) {
 
       {/* ===== MOBILE ACTIONS ===== */}
       <div className="sm:hidden space-y-2">
+        <Button variant="outline" className="w-full rounded-full h-11" onClick={() => onPlay?.(item)}>
+          Play guided workout
+        </Button>
         <Button className="w-full rounded-full h-11" onClick={completeSet}>
           Complete set (+{nextSetSize})
         </Button>
@@ -410,6 +418,9 @@ function TaskCard({ item, onChanged }) {
 
       {/* ===== DESKTOP/TABLET ACTIONS ===== */}
       <div className="hidden sm:flex sm:flex-wrap sm:items-center sm:gap-2">
+        <Button variant="outline" className="rounded-full px-4" onClick={() => onPlay?.(item)}>
+          Play
+        </Button>
         <Button className="rounded-full px-4" onClick={completeSet}>
           Complete set (+{nextSetSize})
         </Button>
@@ -593,7 +604,7 @@ function Segmented({ value, onChange, options, className = "" }) {
   );
 }
 
-export default function Today() {
+export default function Today({ onOpenPlayer }) {
   const [items, setItems] = useState([]);
   const [date, setDate] = useState(dayjs().format("YYYY-MM-DD"));
 
@@ -611,6 +622,7 @@ export default function Today() {
 
   const [me, setMe] = useState(null);
   const [showBday, setShowBday] = useState(false);
+  const [playerRequest, setPlayerRequest] = useState(null);
 
   const handleItemChanged = async ({ from, to, jumpTo } = {}) => {
     await loadPlan(date);
@@ -657,26 +669,20 @@ export default function Today() {
 
     const s = await api.statsSummary(from, to);
 
-    const todayStr = dayjs().format("YYYY-MM-DD");
     const statusMap = {};
     for (const d of s?.days ?? []) {
-      if (d.date === todayStr) {
-        const done = Number(d?.done ?? 0);
-        const target = Number(d?.target ?? 0);
-        let status = "none";
-        if (target > 0) {
-          if (done >= target) status = "done";
-          else if (done > 0) status = "partial";
-          else status = "missed";
-        } else if (done > 0) {
-          status = "partial";
-        }
-        statusMap[d.date] = status;
+      const done = Number(d?.done ?? 0);
+      const target = Number(d?.target ?? 0);
+      if (target > 0) {
+        if (done >= target) statusMap[d.date] = "done";
+        else if (done > 0) statusMap[d.date] = "partial";
+        else statusMap[d.date] = dayjs(d.date).isAfter(dayjs(), "day") ? "scheduled" : "missed";
+      } else if (done > 0) {
+        statusMap[d.date] = "partial";
       } else {
-        statusMap[d.date] = "none";
+        statusMap[d.date] = "rest";
       }
     }
-    setStatusByDate(statusMap);
 
     // Base groups from API (unique)
     const gmap = {};
@@ -697,10 +703,17 @@ export default function Today() {
           if (isActiveOnDate(tpl, ds)) set.add(grp);
         }
         gmap[ds] = Array.from(set);
+        if (!statusMap[ds]) {
+          if (set.size === 0) statusMap[ds] = "rest";
+          else statusMap[ds] = cursor.isAfter(dayjs(), "day") ? "scheduled" : "missed";
+        } else if (statusMap[ds] === "rest" && set.size > 0) {
+          statusMap[ds] = cursor.isAfter(dayjs(), "day") ? "scheduled" : "missed";
+        }
         cursor = cursor.add(1, "day");
       }
     }
 
+    setStatusByDate(statusMap);
     setGroupsByDate(gmap);
   }
 
@@ -882,12 +895,21 @@ export default function Today() {
           )}
         </div>
       </div>
+      {planLoadedOnce && (
+        <div className="card p-4 md:p-5 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="font-semibold">Daily Player</div>
+            <div className="small">Build and run the full day from the dedicated Player tab.</div>
+          </div>
+          <Button onClick={onOpenPlayer} className="h-11">Open Player</Button>
+        </div>
+      )}
       {loadingPlan && !planLoadedOnce ? null : (
         grouped.map(([groupName, rows]) => (
           <div key={groupName} className="space-y-3">
             <div className="px-1 text-sm font-semibold text-muted-foreground">{groupName}</div>
             {rows.map((it) => (
-              <TaskCard key={it._id} item={it} onChanged={handleItemChanged} />
+              <TaskCard key={it._id} item={it} onChanged={handleItemChanged} onPlay={(item) => setPlayerRequest({ type: "single", item })} />
             ))}
           </div>
         ))
@@ -923,6 +945,33 @@ export default function Today() {
 
       {showBday && (
         <BirthdayOverlay message="Happy Birthday Jenn" onClose={() => setShowBday(false)} />
+      )}
+
+      {playerRequest && (
+        playerRequest.type === "daily" ? (
+          <WorkoutPlayer
+            items={playerRequest.items || []}
+            onClose={() => setPlayerRequest(null)}
+            onSaved={async () => {
+              await handleItemChanged();
+              setPlayerRequest(null);
+            }}
+          />
+        ) : (
+          <WorkoutPlayer
+            item={playerRequest.item}
+            blocks={
+              normalizeSessionBlocks(playerRequest.item?.templateId?.sessionBlocks || []).length
+                ? normalizeSessionBlocks(playerRequest.item?.templateId?.sessionBlocks || [])
+                : fallbackBlocksFromDaily(playerRequest.item)
+            }
+            onClose={() => setPlayerRequest(null)}
+            onSaved={async () => {
+              await handleItemChanged();
+              setPlayerRequest(null);
+            }}
+          />
+        )
       )}
     </div>
   );

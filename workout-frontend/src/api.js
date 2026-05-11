@@ -128,6 +128,8 @@ export const api = {
   updateMe: (patch) => req('/me', { method: 'PATCH', body: JSON.stringify(patch) }),
   login:    (email, password) => req('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   logout:   async () => { try { await req('/auth/logout', { method: 'POST' }); } finally { setToken(''); } },
+  requestPasswordReset: (email) => req('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) }),
+  resetPassword: (token, password) => req('/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, password }) }),
   me:       () => req('/me'),
 
   listTemplates:   () => req(`/templates?${ts()}`),
@@ -148,6 +150,9 @@ export const api = {
 
   statsSummary: (from, to) => req(`/stats/summary?from=${from}&to=${to}&${ts()}`),
   weightsSeries:(from, to, templateId) => req(`/stats/weights?from=${from}&to=${to}${templateId ? `&templateId=${templateId}` : ''}&${ts()}`),
+  createSession: (payload) => req('/sessions', { method: 'POST', body: JSON.stringify(payload) }),
+  getSessions: ({ from, to } = {}) => req(`/sessions?from=${from || ''}&to=${to || ''}&${ts()}`),
+  getSessionSummary: ({ from, to } = {}) => req(`/sessions/summary?from=${from || ''}&to=${to || ''}&${ts()}`),
 
   moveDaily: (dailyId, toDate) => req(`/daily/${dailyId}/move`, { method: 'POST', body: JSON.stringify({ toDate }) }),
   moveDay:   (fromDate, toDate) => req(`/daily/move-day`, { method: 'POST', body: JSON.stringify({ fromDate, toDate }) }),
