@@ -23,3 +23,8 @@ build/
 *.bak
 *.swp
 *.swo
+
+# secrets (added 2026-10-26)
+*.pem
+.env.production
+.env
